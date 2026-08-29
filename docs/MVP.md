@@ -18,7 +18,7 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 3a′ — Plug-and-play language architecture, init wizard | ✅ Done (ADR-0011) — `LanguagePolicy` interface, `.cartograph.json`, `ctx init`/`ctx languages` |
 | 3b/3c — C#, Python extractors | ⬜ Post-MVP (now a drop-in addition per ADR-0011, not a core rewrite) |
 | 3d — Daemon watcher (V0: full reindex on change, not per-file incremental) | ✅ Done (ADR-0012) — `internal/watch` + real `cmd/ctxd`, verified end-to-end |
-| 6 (V0) — Web UI: Overview, Search, Entity Inspector, bounded Graph | ✅ Done (ADR-0013) — served by `ctxd --web`, vanilla HTML/JS, no build step |
+| 6 — Web UI: integrated Overview (table+detail+graph+impact tabs), navigable graph, git-diff impact | ✅ Done (ADR-0013/0015) — served by `ctxd --web`, React+Vite (reversed from V0's no-build choice) |
 | 4 — Impact analysis (`ctx impact`, git-diff-driven blast radius) | ✅ Done (ADR-0014) — unblocks the Web UI's Impact view |
 | 5 — Duplicate/similarity engine (Web UI's Duplicates view depends on this) | ⬜ Post-MVP |
 | 7-9 — Cross-repo, learned relationships, AI, hardening | ⬜ Post-MVP |
@@ -201,11 +201,18 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
   contains the tests that commit touched, ≥80% of the time — was not run; needs a real repo with
   meaningful history/coverage to validate against).
 - **Duplicate/Similarity Engine** (Phase 5) — the LSH funnel, the duplicate-decision UI concept.
-- **Web UI beyond the V0 slice** (Phase 6, ADR-0013 shipped Overview/Search/Inspector/bounded
-  Graph) — entity classification/tagging, pattern identification as a first-class surface,
-  filtering as a cross-cutting primitive, Duplicates/Impact views (blocked on Phase 4/5),
-  Projects/Settings (blocked on a multi-project registry), and live updates when `ctxd`'s watcher
-  reindexes. Full remaining ask in `docs/requirements/phase6-web-ui.md`.
+- **Web UI beyond ADR-0013/0015's scope** — entity classification/tagging, pattern identification
+  as a first-class surface, filtering as a cross-cutting primitive, a Duplicates view (blocked on
+  Phase 5), Projects/Settings (blocked on a multi-project registry), and live updates when
+  `ctxd`'s watcher reindexes. Full remaining ask in `docs/requirements/phase6-web-ui.md`.
+- **Grafel-parity UI surfaces evaluated and explicitly not pursued** — Topology/Links (need
+  multi-repo, Phase 7/9), Security/Taint/Dependency-Injection/Error-flow/Infrastructure/GraphQL
+  (entire analysis domains never in this project's own scope — Grafel's, not Cartograph's, per
+  the master plan), a background-enrichment "Pending" queue (a different processing paradigm than
+  `ctxd`'s simple watch-and-reindex). **Paths** (shortest path between two entities — cheap, this
+  project already has the BFS infra) and **Docs** (rendering `Entity.DocSummary`, a field that
+  exists but no extractor populates yet) were identified as real, low-cost additions worth
+  revisiting.
 - **Cross-repo linking, learned relationships, agent policy files** (Phase 7).
 - **Optional AI provider integration, Ask AI** (Phase 8).
 - **Hardening, installer, distribution** (Phase 9) — global install (`ctx`/`ctxd` on `PATH`, no
@@ -238,22 +245,32 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
    measured, documented scoping choice), verified end-to-end against a real fixture (entity count
    moving 4→5 after a live content change with zero manual `ctx index` re-run).
 8. ~~Web UI V0~~ — done, ADR-0013: `internal/service.Graph` + `internal/httpserver` (a thin HTTP
-   adapter, same "no duplicated logic" rule as MCP) + an embedded vanilla-JS frontend (no Node/
-   build step — the user's explicit choice over React+TS), served by `ctxd --web`. Overview,
-   Search, Entity Inspector, and a bounded (never whole-repo) Graph view, verified end-to-end
-   against this project's own self-hosted source. Duplicates/Impact stay deferred — no Phase 4/5
-   data exists yet to show in them.
+   adapter, same "no duplicated logic" rule as MCP), served by `ctxd --web`. Shipped as an
+   embedded vanilla-JS frontend (no Node/build step); later reversed once real usage found it
+   insufficient — see item 10.
 9. ~~Impact analysis (Phase 4)~~ — done, ADR-0014: `internal/store.Upstream` (a new directional,
    incoming-edges-only, unlimited-depth traversal — impact analysis's actual question, distinct
    from `Related`'s bidirectional interactive walk), `internal/gitdiff` (real `git diff` parsing,
    no external library), `ctx impact`/`context_impact` (MCP)/the Web UI's Impact panel, all
    sharing one core (`service.impactFor`). Verified against a real call-chain fixture and a real
    temporary git repo, plus manually against this project's own self-hosted source.
-10. Web UI visual/UX overhaul in progress, per direct user feedback that the V0 slice looked
-    unpolished and the graph view was static (one-shot render, not navigable) — see ADR-0015 once
-    written.
-11. Next up after that: C#/Python extractors (Phase 3b/3c — a drop-in addition per ADR-0011), true
-    per-file incremental indexing, the similarity/duplicate engine (Phase 5, the Web UI's last
-    remaining blocked view), or the global-install/system-service work (Phase 9, requirements
-    already captured) — prioritized by real usage feedback, not by continuing to iterate on ranker
-    constants against one synthetic fixture.
+10. ~~Web UI rebuilt on React~~ — done, ADR-0015: moved off the V0 vanilla-JS build (ADR-0013)
+    after direct feedback that it looked unpolished next to Grafel's own dashboard and that the
+    graph view was static. Reuses real Grafel `webui-v2` UI code (design tokens, primitives,
+    layout pattern — MIT, explicitly authorized for the UI layer only; see `NOTICE.md`), rejected
+    `@cosmos.gl/graph` after real usage (renders no per-node text, wrong for this project's
+    bounded-neighborhood scale) in favor of `@xyflow/react` + dagre, merged Overview/Explore/Graph/
+    Impact into one integrated workspace (clickable Kind cards filter a real paginated table;
+    selecting a row shows Detail/Graph/Impact as tabs, not separate page navigations), added a
+    Tree view alongside Graph (same relationship data, read as text), simplified the standalone
+    Impact route to git-diff-only, and fixed three real bugs surfaced by live testing: ambiguous
+    names failing with a raw service error instead of a picker, a dropped `file` hint breaking
+    disambiguation between linked views, and unbounded breadcrumb-history growth when
+    self-navigating an isolated/self-referencing node.
+11. Next up: the "easy win" Grafel-inspired surfaces identified but not yet built (Paths —
+    shortest path between two entities, cheap given existing BFS infra; Quality — persisting and
+    surfacing the `bug_rate`/disposition breakdown already computed at index time but not
+    persisted; Operations — `ctxd`'s own watch/reindex status) — or, per the deferred list above,
+    C#/Python extractors (Phase 3b/3c), true per-file incremental indexing, the similarity/
+    duplicate engine (Phase 5), or the global-install/system-service work (Phase 9) — prioritized
+    by real usage feedback, not by continuing to iterate against one synthetic fixture.

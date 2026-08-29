@@ -9,20 +9,28 @@ discover the duplicate later becomes graph → ranked context capsule → 2-3 ta
 grep to verify.
 
 **Status**: MVP shipped (Phase 2), plus Go support (Phase 3a), a plug-and-play language
-architecture (Phase 3a′), a daemon watcher (Phase 3d V0), and a first web UI slice (Phase 6 V0) —
-TypeScript and Go extraction/resolution, the Context Compiler, an MCP server, `ctxd` (index once,
-then watch and re-index on change), and a browser UI (Overview/Search/Entity Inspector/bounded
-Graph) are all built, tested, and measured against both a real coding agent (ADR-0009) and this
-project's own real source (ADR-0010: 0.1% bug_rate self-hosting). See
-[`docs/MVP.md`](docs/MVP.md) for the full picture and [`docs/adr/`](docs/adr/) for how every
-decision was made. Functional via CLI, MCP, and now a browser today. C#/Python extraction, true
-per-file incremental indexing, and global system-level install are still ahead — see the
+architecture (Phase 3a′), a daemon watcher (Phase 3d V0), impact analysis (Phase 4), and a
+React-based web UI (Phase 6) — TypeScript and Go extraction/resolution, the Context Compiler, an
+MCP server, `ctxd` (index once, then watch and re-index on change), `ctx impact`/git-diff blast
+radius, and a browser UI (an integrated Overview with a searchable/filterable entity table, a
+navigable graph + tree view, and impact analysis, all in one workspace — see
+[ADR-0015](docs/adr/0015-react-web-ui.md)) are all built, tested, and measured against both a
+real coding agent (ADR-0009) and this project's own real source (ADR-0010: 0.1% bug_rate
+self-hosting). See [`docs/MVP.md`](docs/MVP.md) for the full picture and
+[`docs/adr/`](docs/adr/) for how every decision was made. Functional via CLI, MCP, and a browser
+today. C#/Python extraction, true per-file incremental indexing, the similarity/duplicate engine,
+and global system-level install are still ahead — see the
 [known limitations](#known-limitations) below.
 
 ## Prerequisites
 
 - **Go 1.27** or newer (`go.mod` pins this)
 - **A C compiler** (`cc`/`clang`/`gcc`) — the TypeScript extractor uses tree-sitter via cgo
+- **Node.js** (any current LTS) — only needed to build the web UI (`make web`/`make build`); the
+  Go binaries themselves have no Node runtime dependency. If you only want the CLI/MCP server and
+  don't have Node installed, build those directly (`go build ./cmd/ctx`, `./cmd/ctxmcp`) instead
+  of `make build`, or `go build ./cmd/ctxd` after leaving the previously-built
+  `internal/httpserver/web/` in place from an earlier `make web`.
 - macOS or Linux (CI runs both; Windows is untested)
 
 ## Install
@@ -144,11 +152,18 @@ addr`, or disable with `--web ""`):
 # then open http://127.0.0.1:7420 in a browser
 ```
 
-Overview (entity/edge counts, a breakdown by kind), a search box, an entity inspector (fan-in/
-fan-out, source view), and a bounded graph view (one entity's neighborhood, never the whole repo
-at once). Plain HTML/CSS/JS embedded in the `ctxd` binary — no Node.js/npm/build step, by choice
-(see [ADR-0013](docs/adr/0013-web-ui-v0.md)). Duplicates and Impact views aren't built yet — they
-need Phase 4/5 (impact analysis, similarity engine), neither of which exists.
+One integrated workspace, not a set of separate pages: Overview's entity/edge counts and per-Kind
+breakdown are clickable filters over a real, searchable, paginated entity table — selecting a row
+shows **Detail** (fan-in/fan-out, source view), **Graph** (a navigable graph of that entity's
+neighborhood — click any node to make it the new center, or switch to a **Tree** view of the same
+relationships as an indented text list), and **Impact** (blast radius, no search step needed) as
+tabs in the same panel. A separate `/graph` and `/impact` route cover free-form exploration and
+git-diff-driven impact analysis. Built with React + Vite + Tailwind (`web/`, compiled by
+`make web` into `internal/httpserver/web/` for `go:embed` — see
+[ADR-0015](docs/adr/0015-react-web-ui.md) for why this reversed ADR-0013's original no-Node
+choice, and for the real UI code reused from Grafel's own dashboard, MIT-licensed and explicitly
+authorized for this layer — see [`NOTICE.md`](NOTICE.md)). A Duplicates view isn't built yet — it
+needs Phase 5 (the similarity engine), which doesn't exist.
 
 ## Using it from a coding agent (MCP)
 

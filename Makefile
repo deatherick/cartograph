@@ -1,6 +1,19 @@
-.PHONY: build test lint bench bench-real clean
+.PHONY: build web test lint bench bench-real clean
 
-build:
+# web builds the React frontend (web/) and copies its output into
+# internal/httpserver/web/ — the directory internal/httpserver.go embeds
+# via go:embed. go:embed directives cannot reference a parent directory
+# (no "../"), so the built assets have to physically live inside the Go
+# package tree; this copy step is that bridge. See
+# docs/adr/0015-react-web-ui.md for why the web UI needs a Node/npm build
+# step at all (a reversal of ADR-0013's original no-Node choice).
+web:
+	cd web && npm install && npm run build
+	rm -rf internal/httpserver/web
+	mkdir -p internal/httpserver/web
+	cp -r web/dist/. internal/httpserver/web/
+
+build: web
 	go build -o bin/ctx ./cmd/ctx
 	go build -o bin/ctxd ./cmd/ctxd
 	go build -o bin/ctxbench ./cmd/ctxbench
