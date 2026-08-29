@@ -37,6 +37,7 @@ import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
 import { ArrowLeft, Search as SearchIcon, Waypoints, ListTree } from 'lucide-react'
 import { api, type Entity, type Inspection } from '@/lib/api'
+import { useProject } from '@/lib/project-context'
 import { kindSlot, KIND_LEGEND } from '@/lib/graph-colors'
 import { Button, Input } from '@/components/ui'
 import { cn } from '@/lib/utils'
@@ -96,6 +97,7 @@ function layout(nodes: Node[], edges: Edge[]): Node[] {
 }
 
 export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initialName?: string; initialFile?: string }) {
+  const { project } = useProject()
   const [searchInput, setSearchInput] = useState(initialName)
   const [center, setCenter] = useState<HistoryEntry | null>(initialName ? { name: initialName, file: initialFile } : null)
   const [history, setHistory] = useState<HistoryEntry[]>([])
@@ -142,16 +144,30 @@ export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initi
     })
   }, [])
 
+  // A genuine project switch (not the initial '' -> real-name resolution
+  // on mount) invalidates whatever center/history/candidates came from
+  // the previous project's graph.
+  const prevProjectRef = useRef(project)
   useEffect(() => {
-    if (!center) return
+    if (prevProjectRef.current && prevProjectRef.current !== project) {
+      setCenter(null)
+      setHistory([])
+      setCandidates(null)
+      setError(null)
+    }
+    prevProjectRef.current = project
+  }, [project])
+
+  useEffect(() => {
+    if (!center || !project) return
     let cancelled = false
     setLoading(true)
     setError(null)
 
     ;(async () => {
       try {
-        const insp = await api.inspect(center.name, center.file)
-        const related = await api.related(center.name, center.file, 2)
+        const insp = await api.inspect(project, center.name, center.file)
+        const related = await api.related(project, center.name, center.file, 2)
         if (cancelled) return
 
         const entities: Entity[] = [insp.Entity]
@@ -198,7 +214,7 @@ export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initi
         // onSearchSubmit uses, instead of surfacing the raw service error.
         if (message.includes('is ambiguous across')) {
           try {
-            const matches = await api.find(center.name)
+            const matches = await api.find(project, center.name)
             if (matches.length > 1) {
               setCandidates(matches)
               setCenter(null)
@@ -217,7 +233,7 @@ export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initi
     return () => {
       cancelled = true
     }
-  }, [center, setNodes, setEdges])
+  }, [center, project, setNodes, setEdges])
 
   const onSearchSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -227,7 +243,7 @@ export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initi
       setError(null)
       setCandidates(null)
       try {
-        const matches = await api.find(name)
+        const matches = await api.find(project, name)
         if (matches.length === 0) {
           setError(`No entity named "${name}" found.`)
         } else if (matches.length === 1) {
@@ -239,7 +255,7 @@ export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initi
         setError(e instanceof Error ? e.message : String(e))
       }
     },
-    [searchInput, navigateTo],
+    [searchInput, project, navigateTo],
   )
 
   const pickCandidate = useCallback(

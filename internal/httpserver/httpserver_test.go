@@ -16,7 +16,10 @@ import (
 // setup indexes a small real TypeScript fixture and returns an httptest
 // server backed by internal/httpserver — an integration test against the
 // real service layer, not mocked handlers, matching internal/mcpserver's
-// own testing convention (real transports, real service calls).
+// own testing convention (real transports, real service calls). Single
+// project, ops omitted — every existing (pre-multi-project) test here
+// keeps working against a one-element []Project with no ?project=
+// needed, since resolveProject defaults to projects[0].
 func setup(t *testing.T) *httptest.Server {
 	t.Helper()
 	root := t.TempDir()
@@ -29,7 +32,7 @@ func setup(t *testing.T) *httptest.Server {
 	if _, err := svc.Index(t.Context(), root, repo); err != nil {
 		t.Fatalf("Index: %v", err)
 	}
-	return httptest.NewServer(New(svc, root, repo, nil))
+	return httptest.NewServer(New(svc, []Project{{Name: repo, Repo: repo, Root: root}}))
 }
 
 func TestHTTPServer_Stats(t *testing.T) {
@@ -210,7 +213,7 @@ func TestHTTPServer_ServesEmbeddedFrontend(t *testing.T) {
 }
 
 func TestHTTPServer_Operations_NilTracker_Returns404(t *testing.T) {
-	srv := setup(t) // setup passes nil for ops
+	srv := setup(t) // setup passes no Ops for its one project
 	defer srv.Close()
 
 	res, err := http.Get(srv.URL + "/api/operations")
@@ -240,7 +243,7 @@ func TestHTTPServer_Operations_WithTracker_ReportsStatus(t *testing.T) {
 	ops.SetWatching(true)
 	ops.RecordReindexSuccess("initial index", stats)
 
-	srv := httptest.NewServer(New(svc, root, repo, ops))
+	srv := httptest.NewServer(New(svc, []Project{{Name: repo, Repo: repo, Root: root, Ops: ops}}))
 	defer srv.Close()
 
 	res, err := http.Get(srv.URL + "/api/operations")
@@ -272,7 +275,8 @@ func TestHTTPServer_Operations_WithTracker_ReportsStatus(t *testing.T) {
 func TestHTTPServer_MissingIndex_ReturnsClearError(t *testing.T) {
 	root := t.TempDir()
 	svc := service.New()
-	srv := httptest.NewServer(New(svc, root, service.RepoName(root), nil))
+	repo := service.RepoName(root)
+	srv := httptest.NewServer(New(svc, []Project{{Name: repo, Repo: repo, Root: root}}))
 	defer srv.Close()
 
 	res, err := http.Get(srv.URL + "/api/stats")
@@ -283,4 +287,159 @@ func TestHTTPServer_MissingIndex_ReturnsClearError(t *testing.T) {
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got status %d, want 400 for a missing snapshot", res.StatusCode)
 	}
+}
+
+// setupTwoProjects indexes two distinct, differently-sized TS fixtures and
+// returns a server serving both — the multi-project scenario ADR-0019
+// adds: same svc, two independent repos, selected via ?project=.
+func setupTwoProjects(t *testing.T) (*httptest.Server, string, string) {
+	t.Helper()
+	svc := service.New()
+
+	rootA := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rootA, "a.ts"), []byte(
+		"export function helper(): string { return greet(); }\nexport function greet(): string { return 'hi'; }\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repoA := "project-a"
+	if _, err := svc.Index(t.Context(), rootA, repoA); err != nil {
+		t.Fatalf("Index A: %v", err)
+	}
+
+	rootB := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rootB, "b.ts"), []byte(
+		"export function alpha(): void {}\nexport function beta(): void {}\nexport function gamma(): void {}\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repoB := "project-b"
+	if _, err := svc.Index(t.Context(), rootB, repoB); err != nil {
+		t.Fatalf("Index B: %v", err)
+	}
+
+	opsA := opstatus.New()
+	opsA.SetWatching(true)
+	srv := httptest.NewServer(New(svc, []Project{
+		{Name: "a", Repo: repoA, Root: rootA, Ops: opsA},
+		{Name: "b", Repo: repoB, Root: rootB}, // no Ops — 404 on /api/operations?project=b
+	}))
+	return srv, "a", "b"
+}
+
+func TestHTTPServer_MultiProject_ListsBoth(t *testing.T) {
+	srv, nameA, nameB := setupTwoProjects(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var got []struct {
+		Name     string `json:"name"`
+		Repo     string `json:"repo"`
+		Watching bool   `json:"watching"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 projects listed, got %+v", got)
+	}
+	byName := map[string]bool{}
+	for _, p := range got {
+		byName[p.Name] = p.Watching
+	}
+	if watching, ok := byName[nameA]; !ok || !watching {
+		t.Errorf("expected project %q listed and watching=true, got %+v", nameA, got)
+	}
+	if watching, ok := byName[nameB]; !ok || watching {
+		t.Errorf("expected project %q listed and watching=false (no Ops), got %+v", nameB, got)
+	}
+}
+
+func TestHTTPServer_MultiProject_StatsAreScopedPerProject(t *testing.T) {
+	srv, nameA, nameB := setupTwoProjects(t)
+	defer srv.Close()
+
+	getEntities := func(project string) int {
+		res, err := http.Get(srv.URL + "/api/stats?project=" + project)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		var got struct{ Entities int }
+		if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Entities
+	}
+
+	if n := getEntities(nameA); n != 2 {
+		t.Errorf("project a: expected 2 entities, got %d", n)
+	}
+	if n := getEntities(nameB); n != 3 {
+		t.Errorf("project b: expected 3 entities, got %d", n)
+	}
+
+	// No ?project= at all must fall back to the first project (a), not error.
+	res, err := http.Get(srv.URL + "/api/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var got struct{ Entities int }
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Entities != 2 {
+		t.Errorf("expected default (no ?project=) to resolve to project a's 2 entities, got %d", got.Entities)
+	}
+}
+
+func TestHTTPServer_MultiProject_UnknownProject_Is400(t *testing.T) {
+	srv, _, _ := setupTwoProjects(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/stats?project=does-not-exist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400 for an unregistered ?project=", res.StatusCode)
+	}
+}
+
+func TestHTTPServer_MultiProject_OperationsIsPerProject(t *testing.T) {
+	srv, nameA, nameB := setupTwoProjects(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/operations?project=" + nameA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("project a: got status %d, want 200 (it has an Ops tracker)", res.StatusCode)
+	}
+
+	res2, err := http.Get(srv.URL + "/api/operations?project=" + nameB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res2.Body.Close() }()
+	if res2.StatusCode != http.StatusNotFound {
+		t.Fatalf("project b: got status %d, want 404 (no Ops tracker)", res2.StatusCode)
+	}
+}
+
+func TestHTTPServer_New_PanicsWithNoProjects(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected New to panic when given an empty []Project")
+		}
+	}()
+	New(service.New(), nil)
 }

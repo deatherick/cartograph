@@ -3,6 +3,7 @@ import { AppShell } from '@/components/chrome/AppShell'
 import { Overview } from '@/pages/Overview'
 import { GraphPage } from '@/pages/GraphPage'
 import { ImpactPage } from '@/pages/ImpactPage'
+import { ProjectProvider } from '@/lib/project-context'
 
 const router = createBrowserRouter([
   {
@@ -16,5 +17,9 @@ const router = createBrowserRouter([
 ])
 
 export function App() {
-  return <RouterProvider router={router} />
+  return (
+    <ProjectProvider>
+      <RouterProvider router={router} />
+    </ProjectProvider>
+  )
 }

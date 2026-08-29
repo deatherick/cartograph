@@ -5,17 +5,21 @@
 // internal/service; none of them compute anything internal/service
 // doesn't already expose.
 //
-// V0 scope, stated plainly (docs/requirements/phase6-web-ui.md): this
-// serves ONE project, fixed at construction time — root/repo are set once
-// by New's caller (cmd/ctxd), matching that binary's own current
-// single-project scope (no multi-project registry yet, ADR-0012). A
-// "Projects" view/endpoint is deferred until that exists. Duplicates and
-// Impact views from the original requirements capture are also deferred —
-// they depend on Phase 4 (impact analysis) and Phase 5 (similarity
-// engine), neither built yet; this only serves what internal/service can
-// already answer: Overview, Search, Entity Inspector, and a bounded Graph
-// view scoped to one entity's neighborhood (never the whole repo at
-// once — a hundreds-of-nodes force layout is neither useful nor fast).
+// Multi-project since ADR-0019: New takes a slice of Project (name, repo,
+// root, and an optional per-project opstatus.Tracker) rather than one
+// fixed root/repo pair. Every /api/ handler reads an optional ?project=
+// query parameter to pick which registered project it answers for
+// (defaulting to the first one in the slice, so a single-project caller —
+// still the common case — never has to pass it). /api/projects lists what
+// is available, for a frontend project switcher to populate itself with.
+//
+// Duplicates and Impact-by-entity-name views from the original
+// requirements capture are also deferred — they depend on Phase 4 (impact
+// analysis, since done) and Phase 5 (similarity engine, not yet); this
+// only serves what internal/service can already answer: Overview, Search,
+// Entity Inspector, and a bounded Graph view scoped to one entity's
+// neighborhood (never the whole repo at once — a hundreds-of-nodes force
+// layout is neither useful nor fast).
 package httpserver
 
 import (
@@ -33,17 +37,36 @@ import (
 //go:embed web
 var webFS embed.FS
 
+// Project is one project New serves — the daemon-side analog of a single
+// row in internal/project's CLI-only registry (ADR-0016), except this one
+// is live: Ops is set once that project is actually being watched.
+type Project struct {
+	// Name identifies this project in the ?project= query parameter and
+	// in /api/projects' listing — the registered short name if the caller
+	// resolved one (internal/project.Resolve), else the repo's own name
+	// (service.RepoName's derivation), so a single unregistered project
+	// still gets a sensible default identity.
+	Name string
+	Repo string
+	Root string
+	// Ops is optional (nil is fine) — a project New was told about but
+	// that has no daemon lifecycle to report (e.g. a caller that only
+	// ever calls svc.Index once, never watches). Its /api/operations
+	// slice reports 404 in that case, same as the pre-multi-project
+	// behavior (ADR-0018).
+	Ops *opstatus.Tracker
+}
+
 // New builds the HTTP handler: the embedded static frontend at "/", and
-// its JSON API under "/api/". root/repo are fixed for the lifetime of the
-// handler — see the package doc's V0 scope note. ops is optional (nil is
-// fine, e.g. from a caller with no daemon lifecycle to report, such as
-// this package's own tests) — when nil, /api/operations reports 404
-// rather than serving empty/fake data. This is the one deliberate
-// exception to the package doc's "every handler calls straight into
-// internal/service" rule: ops.Snapshot() is daemon lifecycle state
-// (internal/opstatus), not product data internal/service knows about —
-// see ADR-0018.
-func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Handler {
+// its JSON API under "/api/". projects must be non-empty; the first
+// element is the default project used whenever a request's ?project=
+// is empty or omitted, so a single-project caller (still the common case)
+// never needs to pass it at all. See the package doc for the multi-project
+// query-parameter contract.
+func New(svc *service.Service, projects []Project) http.Handler {
+	if len(projects) == 0 {
+		panic("httpserver: New requires at least one Project")
+	}
 	mux := http.NewServeMux()
 
 	static, err := fs.Sub(webFS, "web")
@@ -56,8 +79,53 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 	}
 	mux.Handle("/", http.FileServer(http.FS(static)))
 
+	byName := make(map[string]Project, len(projects))
+	for _, p := range projects {
+		byName[p.Name] = p
+	}
+	// resolveProject picks which registered Project a request means: its
+	// ?project= name if given and known, the sole default (projects[0])
+	// if omitted, or a clear 400 if a name was given but isn't registered
+	// — never a silent fallback to the default in that case, since that
+	// would make a typo look like a query against the wrong project
+	// instead of an obvious error.
+	resolveProject := func(w http.ResponseWriter, r *http.Request) (Project, bool) {
+		name := r.URL.Query().Get("project")
+		if name == "" {
+			return projects[0], true
+		}
+		p, ok := byName[name]
+		if !ok {
+			http.Error(w, "unknown project "+strconv.Quote(name), http.StatusBadRequest)
+			return Project{}, false
+		}
+		return p, true
+	}
+
+	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
+		type projectSummary struct {
+			Name     string `json:"name"`
+			Repo     string `json:"repo"`
+			Root     string `json:"root"`
+			Watching bool   `json:"watching"`
+		}
+		out := make([]projectSummary, len(projects))
+		for i, p := range projects {
+			s := projectSummary{Name: p.Name, Repo: p.Repo, Root: p.Root}
+			if p.Ops != nil {
+				s.Watching = p.Ops.Snapshot().Watching
+			}
+			out[i] = s
+		}
+		writeJSON(w, out)
+	})
+
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
-		g, err := svc.Graph(root, repo)
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
+		g, err := svc.Graph(p.Root, p.Repo)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -71,11 +139,15 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 			Entities int                `json:"entities"`
 			Edges    int                `json:"edges"`
 			ByKind   map[model.Kind]int `json:"byKind"`
-		}{Repo: repo, Entities: len(g.Entities), Edges: len(g.Edges), ByKind: byKind})
+		}{Repo: p.Repo, Entities: len(g.Entities), Edges: len(g.Edges), ByKind: byKind})
 	})
 
 	mux.HandleFunc("/api/graph", func(w http.ResponseWriter, r *http.Request) {
-		g, err := svc.Graph(root, repo)
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
+		g, err := svc.Graph(p.Root, p.Repo)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -84,12 +156,16 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 	})
 
 	mux.HandleFunc("/api/find", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
 		name := r.URL.Query().Get("name")
 		if name == "" {
 			http.Error(w, "missing ?name=", http.StatusBadRequest)
 			return
 		}
-		entities, err := svc.Find(root, repo, name)
+		entities, err := svc.Find(p.Root, p.Repo, name)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -98,12 +174,16 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 	})
 
 	mux.HandleFunc("/api/inspect", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
 		name := r.URL.Query().Get("name")
 		if name == "" {
 			http.Error(w, "missing ?name=", http.StatusBadRequest)
 			return
 		}
-		insp, err := svc.Inspect(root, repo, name, r.URL.Query().Get("file"))
+		insp, err := svc.Inspect(p.Root, p.Repo, name, r.URL.Query().Get("file"))
 		if err != nil {
 			writeError(w, err)
 			return
@@ -112,6 +192,10 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 	})
 
 	mux.HandleFunc("/api/related", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
 		name := r.URL.Query().Get("name")
 		if name == "" {
 			http.Error(w, "missing ?name=", http.StatusBadRequest)
@@ -123,7 +207,7 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 				depth = d
 			}
 		}
-		related, err := svc.Related(root, repo, name, r.URL.Query().Get("file"), depth)
+		related, err := svc.Related(p.Root, p.Repo, name, r.URL.Query().Get("file"), depth)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -132,6 +216,10 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 	})
 
 	mux.HandleFunc("/api/impact", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
 		depth := 0 // full transitive closure by default
 		if v := r.URL.Query().Get("depth"); v != "" {
 			if d, perr := strconv.Atoi(v); perr == nil {
@@ -139,7 +227,7 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 			}
 		}
 		if gitRef, ok := r.URL.Query()["gitDiff"]; ok {
-			result, err := svc.ImpactFromGitDiff(root, repo, gitRef[0], depth)
+			result, err := svc.ImpactFromGitDiff(p.Root, p.Repo, gitRef[0], depth)
 			if err != nil {
 				writeError(w, err)
 				return
@@ -152,7 +240,7 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 			http.Error(w, "missing ?name= (or ?gitDiff=<ref>)", http.StatusBadRequest)
 			return
 		}
-		result, err := svc.Impact(root, repo, name, r.URL.Query().Get("file"), depth)
+		result, err := svc.Impact(p.Root, p.Repo, name, r.URL.Query().Get("file"), depth)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -161,12 +249,16 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 	})
 
 	mux.HandleFunc("/api/source", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
 		name := r.URL.Query().Get("name")
 		if name == "" {
 			http.Error(w, "missing ?name=", http.StatusBadRequest)
 			return
 		}
-		src, entity, err := svc.Source(root, repo, name, r.URL.Query().Get("file"))
+		src, entity, err := svc.Source(p.Root, p.Repo, name, r.URL.Query().Get("file"))
 		if err != nil {
 			writeError(w, err)
 			return
@@ -178,11 +270,15 @@ func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Ha
 	})
 
 	mux.HandleFunc("/api/operations", func(w http.ResponseWriter, r *http.Request) {
-		if ops == nil {
-			http.Error(w, "operations status not available (no daemon running)", http.StatusNotFound)
+		p, ok := resolveProject(w, r)
+		if !ok {
 			return
 		}
-		writeJSON(w, ops.Snapshot())
+		if p.Ops == nil {
+			http.Error(w, "operations status not available (no daemon running for this project)", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, p.Ops.Snapshot())
 	})
 
 	return mux

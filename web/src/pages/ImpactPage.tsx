@@ -11,8 +11,10 @@ import { useState } from 'react'
 import { api, type GitDiffImpact } from '@/lib/api'
 import { Input, Button } from '@/components/ui'
 import { EntitySection } from '@/components/EntityImpactPanel'
+import { useProject } from '@/lib/project-context'
 
 export function ImpactPage() {
+  const { project } = useProject()
   const [gitRef, setGitRef] = useState('HEAD')
   const [diffResult, setDiffResult] = useState<GitDiffImpact | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -22,7 +24,7 @@ export function ImpactPage() {
     setLoading(true)
     setError(null)
     try {
-      setDiffResult(await api.impactFromGitDiff(gitRef))
+      setDiffResult(await api.impactFromGitDiff(project, gitRef))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setDiffResult(null)

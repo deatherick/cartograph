@@ -75,6 +75,31 @@ export interface Stats {
   byKind: Record<string, number>
 }
 
+// Project is one entry from /api/projects — the daemon-side multi-project
+// list (ADR-0019). watching reflects that project's opstatus.Tracker, if
+// it has one (a project ctxd is only indexing, never watching, always
+// reports false, not an error).
+export interface Project {
+  name: string
+  repo: string
+  root: string
+  watching: boolean
+}
+
+// Operations is /api/operations' shape — internal/opstatus.Status
+// (Go's PascalCase field names, since that struct carries no json tags;
+// see this file's header note on casing).
+export interface Operations {
+  StartedAt: string
+  Watching: boolean
+  ReindexCount: number
+  LastReindexAt: string
+  LastReason: string
+  LastStats: { Files: number; Entities: number; ResolvedEdges: number; Dispositions: Record<string, number> }
+  LastError: string
+  LastWatchError: string
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(path)
   const data = await res.json()
@@ -84,24 +109,47 @@ async function getJSON<T>(path: string): Promise<T> {
   return data as T
 }
 
+// withProject appends ?project=<name> (or &project=<name> if the path
+// already has a query string) unless project is empty — every endpoint
+// but /api/projects itself is scoped this way (ADR-0019); omitting it
+// entirely falls back to the daemon's first/default project, so callers
+// mid-load (project not resolved yet) degrade gracefully instead of
+// erroring.
+function withProject(path: string, project: string): string {
+  if (!project) return path
+  const sep = path.includes('?') ? '&' : '?'
+  return `${path}${sep}project=${encodeURIComponent(project)}`
+}
+
 export const api = {
-  stats: () => getJSON<Stats>('/api/stats'),
-  graph: () => getJSON<GraphData>('/api/graph'),
-  find: (name: string) => getJSON<Entity[]>(`/api/find?name=${encodeURIComponent(name)}`),
-  inspect: (name: string, file = '') =>
-    getJSON<Inspection>(`/api/inspect?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`),
-  related: (name: string, file = '', depth = 2) =>
+  projects: () => getJSON<Project[]>('/api/projects'),
+  operations: (project: string) => getJSON<Operations>(withProject('/api/operations', project)),
+  stats: (project: string) => getJSON<Stats>(withProject('/api/stats', project)),
+  graph: (project: string) => getJSON<GraphData>(withProject('/api/graph', project)),
+  find: (project: string, name: string) =>
+    getJSON<Entity[]>(withProject(`/api/find?name=${encodeURIComponent(name)}`, project)),
+  inspect: (project: string, name: string, file = '') =>
+    getJSON<Inspection>(
+      withProject(`/api/inspect?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`, project),
+    ),
+  related: (project: string, name: string, file = '', depth = 2) =>
     getJSON<RelatedEntity[]>(
-      `/api/related?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}&depth=${depth}`,
+      withProject(
+        `/api/related?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}&depth=${depth}`,
+        project,
+      ),
     ),
-  impact: (name: string, file = '', depth = 0) =>
+  impact: (project: string, name: string, file = '', depth = 0) =>
     getJSON<ImpactResult>(
-      `/api/impact?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}&depth=${depth}`,
+      withProject(
+        `/api/impact?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}&depth=${depth}`,
+        project,
+      ),
     ),
-  impactFromGitDiff: (gitRef = '', depth = 0) =>
-    getJSON<GitDiffImpact>(`/api/impact?gitDiff=${encodeURIComponent(gitRef)}&depth=${depth}`),
-  source: (name: string, file = '') =>
+  impactFromGitDiff: (project: string, gitRef = '', depth = 0) =>
+    getJSON<GitDiffImpact>(withProject(`/api/impact?gitDiff=${encodeURIComponent(gitRef)}&depth=${depth}`, project)),
+  source: (project: string, name: string, file = '') =>
     getJSON<{ entity: Entity; source: string }>(
-      `/api/source?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`,
+      withProject(`/api/source?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`, project),
     ),
 }

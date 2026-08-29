@@ -1,5 +1,5 @@
 // Command ctxd is the context engine daemon — Phase 3d's vertical slice:
-// index once, then watch the project's source (internal/watch) and
+// index once, then watch each project's source (internal/watch) and
 // re-index automatically whenever it changes, so a snapshot never goes
 // stale while ctxd is running for that project.
 //
@@ -21,10 +21,19 @@
 // scaling caveat internal/watch's own package doc already states for
 // large repos.
 //
-// No system-level installation (launchd/systemd), no multi-project
-// registry, no daemon socket/RPC yet — this runs in the foreground for
-// ONE project path, until interrupted. Those are Phase 9 scope, captured
-// in docs/requirements/phase9-global-install-and-daemon.md at the user's
+// Multi-project since ADR-0019: ctxd accepts more than one <path>
+// argument, one project each, and watches all of them concurrently from
+// one process — the daemon-side registry ADR-0012/ADR-0016 both named as
+// a distinct, harder problem from the CLI-only `ctx project` registry.
+// Each <path> also accepts a name registered via `ctx project add`
+// (internal/project.Resolve), same as every `ctx` CLI command already
+// does.
+//
+// Still no system-level installation (launchd/systemd) and no daemon
+// socket/RPC — every project's status is reachable only through the same
+// HTTP server the web UI already uses (--web). Phase 9 scope (global
+// install, running as a system service) is captured in
+// docs/requirements/phase9-global-install-and-daemon.md at the user's
 // explicit request but not built.
 package main
 
@@ -35,11 +44,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/deatherick/cartograph/internal/httpserver"
 	"github.com/deatherick/cartograph/internal/opstatus"
+	"github.com/deatherick/cartograph/internal/project"
 	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
 	"github.com/deatherick/cartograph/internal/watch"
@@ -50,19 +61,28 @@ func main() {
 	flag.Parse()
 	args := flag.Args()
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: ctxd [--web addr] <path>")
-		fmt.Fprintln(os.Stderr, "\nIndexes <path> once, then watches it and re-indexes on every change until interrupted (Ctrl+C).")
-		fmt.Fprintln(os.Stderr, "Also serves a web UI (Phase 6) at --web (default 127.0.0.1:7420) unless --web=\"\".")
+		fmt.Fprintln(os.Stderr, "usage: ctxd [--web addr] <path> [<path>...]")
+		fmt.Fprintln(os.Stderr, "\nIndexes each <path> once, then watches it and re-indexes on every change until interrupted (Ctrl+C).")
+		fmt.Fprintln(os.Stderr, "Each <path> also accepts a name registered via `ctx project add`.")
+		fmt.Fprintln(os.Stderr, "Also serves a web UI (Phase 6) at --web (default 127.0.0.1:7420) unless --web=\"\", with a project switcher when more than one <path> is given.")
 		os.Exit(2)
 	}
-	root := args[0]
+
 	svc := service.New()
-	repo := service.RepoName(root)
-	ops := opstatus.New()
+	handles := make([]httpserver.Project, len(args))
+	for i, arg := range args {
+		root := project.Resolve(arg)
+		repo := service.RepoName(root)
+		name := repo
+		if root != arg {
+			name = arg // arg was a registered project name — keep it as the friendlier identity
+		}
+		handles[i] = httpserver.Project{Name: name, Repo: repo, Root: root, Ops: opstatus.New()}
+	}
 
 	if *webAddr != "" {
 		go func() {
-			handler := httpserver.New(svc, root, repo, ops)
+			handler := httpserver.New(svc, handles)
 			fmt.Printf("ctxd: web UI at http://%s (operational status: /api/operations)\n", *webAddr)
 			if err := http.ListenAndServe(*webAddr, handler); err != nil { //nolint:gosec // 127.0.0.1 default binding is the security boundary here, not timeouts on a local single-user dev tool
 				fmt.Fprintf(os.Stderr, "ctxd: web UI server error: %v\n", err)
@@ -70,44 +90,69 @@ func main() {
 		}()
 	}
 
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+
+	var wg sync.WaitGroup
+	for _, h := range handles {
+		wg.Add(1)
+		go func(h httpserver.Project) {
+			defer wg.Done()
+			watchProject(done, svc, h)
+		}(h)
+	}
+
+	<-sig
+	fmt.Println("ctxd: shutting down")
+	close(done)
+	wg.Wait()
+}
+
+// watchProject indexes root once, then watches it and re-indexes on every
+// change until done is closed — one project's whole lifecycle, run in its
+// own goroutine so ctxd's multiple projects (ADR-0019) watch fully
+// concurrently, each with its own opstatus.Tracker (h.Ops).
+func watchProject(done <-chan struct{}, svc *service.Service, h httpserver.Project) {
+	label := h.Repo
+	if h.Name != h.Repo {
+		label = h.Name + "/" + h.Repo
+	}
+
 	reindex := func(reason string) {
-		fmt.Printf("ctxd: %s — indexing %s\n", reason, root)
+		fmt.Printf("ctxd[%s]: %s — indexing %s\n", label, reason, h.Root)
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		stats, err := svc.Index(ctx, root, repo)
+		stats, err := svc.Index(ctx, h.Root, h.Repo)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ctxd: index error: %v\n", err)
-			ops.RecordReindexFailure(reason, err)
+			fmt.Fprintf(os.Stderr, "ctxd[%s]: index error: %v\n", label, err)
+			h.Ops.RecordReindexFailure(reason, err)
 			return
 		}
-		ops.RecordReindexSuccess(reason, stats)
+		h.Ops.RecordReindexSuccess(reason, stats)
 		fmt.Print(render.IndexStats(stats))
 	}
 
 	reindex("initial index")
 
-	w, err := watch.New(root, 0)
+	w, err := watch.New(h.Root, 0)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ctxd: starting watcher: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "ctxd[%s]: starting watcher: %v\n", label, err)
+		return
 	}
 	defer func() { _ = w.Close() }()
-	ops.SetWatching(true)
+	h.Ops.SetWatching(true)
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-
-	fmt.Printf("ctxd: watching %s for changes (Ctrl+C to stop)\n", root)
+	fmt.Printf("ctxd[%s]: watching %s for changes\n", label, h.Root)
 	for {
 		select {
 		case <-w.Events():
 			reindex("change detected")
 		case werr := <-w.Errors():
-			fmt.Fprintf(os.Stderr, "ctxd: watch error: %v\n", werr)
-			ops.RecordWatchError(werr)
-		case <-sig:
-			fmt.Println("ctxd: shutting down")
-			ops.SetWatching(false)
+			fmt.Fprintf(os.Stderr, "ctxd[%s]: watch error: %v\n", label, werr)
+			h.Ops.RecordWatchError(werr)
+		case <-done:
+			h.Ops.SetWatching(false)
 			return
 		}
 	}

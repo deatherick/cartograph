@@ -154,6 +154,16 @@ service — see
 [`docs/requirements/phase9-global-install-and-daemon.md`](docs/requirements/phase9-global-install-and-daemon.md)
 for that design, captured but not built yet.
 
+`ctxd` also watches more than one project at once — pass every `<path>` (each also accepts a name
+registered via `ctx project add`):
+
+```bash
+./bin/ctxd cartograph ts-basic   # both watched concurrently from one process
+```
+
+See [ADR-0019](docs/adr/0019-daemon-multi-project-web-ui.md) for the design; the Web UI's project
+switcher (below) is how you pick which one to look at.
+
 ### Web UI
 
 `ctxd` also serves a browser UI by default, at `http://127.0.0.1:7420` (change with `--web
@@ -163,6 +173,10 @@ addr`, or disable with `--web ""`):
 ./bin/ctxd ~/path/to/some/project
 # then open http://127.0.0.1:7420 in a browser
 ```
+
+Watching more than one project shows a project switcher in the header, scoping every view to
+whichever one is selected — data updates live (polled every few seconds) as a watched project's
+source changes, with no manual reload.
 
 One integrated workspace, not a set of separate pages: Overview's entity/edge counts and per-Kind
 breakdown are clickable filters over a real, searchable, paginated entity table — selecting a row

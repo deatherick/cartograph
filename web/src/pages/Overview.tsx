@@ -14,8 +14,11 @@ import { EntityDetail } from '@/components/EntityDetail'
 import { EntityGraphPanel } from '@/components/EntityGraphPanel'
 import { EntityImpactPanel } from '@/components/EntityImpactPanel'
 import { cn } from '@/lib/utils'
+import { useProject } from '@/lib/project-context'
+import { usePoll } from '@/hooks/usePoll'
 
 export function Overview() {
+  const { project } = useProject()
   const [stats, setStats] = useState<Stats | null>(null)
   const [entities, setEntities] = useState<Entity[]>([])
   const [selected, setSelected] = useState<Entity | null>(null)
@@ -23,10 +26,25 @@ export function Overview() {
   const [tab, setTab] = useState<'detail' | 'graph' | 'impact'>('detail')
   const [error, setError] = useState<string | null>(null)
 
+  // Polled, not one-shot: a watched project reindexes out from under this
+  // page (ADR-0019/ADR-0018) and the table/kind counts should catch up
+  // without a manual reload.
+  usePoll(() => {
+    if (!project) return
+    api.stats(project).then(setStats).catch((e) => setError(e.message))
+    api
+      .graph(project)
+      .then((g) => setEntities(g.Entities ?? []))
+      .catch(() => {})
+  }, [project])
+
+  // Switching projects invalidates whatever was selected from the
+  // previous one's entity table — never show a stale detail/graph/impact
+  // panel for an entity that belongs to a different project's graph.
   useEffect(() => {
-    api.stats().then(setStats).catch((e) => setError(e.message))
-    api.graph().then((g) => setEntities(g.Entities ?? [])).catch(() => {})
-  }, [])
+    setSelected(null)
+    setKind('All')
+  }, [project])
 
   if (error) {
     return (

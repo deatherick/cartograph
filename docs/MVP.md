@@ -182,8 +182,10 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
   `docs/research/05-watcher-and-invalidation.md`'s recommendation) is still the right answer
   before this runs against a repo with thousands of directories.
 - No exclusion churn quarantine, no `.git/HEAD` branch-change poller, no crash-reconcile-on-
-  restart, no multi-project registry (`ctxd project add/list`) — `ctxd` takes exactly one path
-  and runs in the foreground. All explicitly deferred, catalogued in
+  restart — `ctxd` still runs in the foreground only. Multi-project watching itself is done
+  (ADR-0019: `ctxd <path> [<path>...]`, one goroutine and `opstatus.Tracker` per project); the
+  still-open gap is a real `ctxd project add/list` command that adds/removes a project from an
+  *already-running* daemon without restarting it. All explicitly deferred, catalogued in
   `docs/research/edge-case-backlog.md`'s `F`/`G` sections.
 - `internal/search`'s FTS5/fuzzy layer does not exist — exact and qualified-name lookup (a linear
   scan) cover today's real need; SQLite is deferred until a feature already needs it
@@ -196,13 +198,14 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
   — a task capsule can't currently be scoped to "only consider files matching X."
   Repo directory naming collisions across two different paths sharing a repo name are handled by
   path hashing (`internal/store.RepoDir`).
-- ~~No real multi-project management~~ — **fixed**: `internal/project` (`ctx project
-  add/list/remove`), a small global name→path registry every CLI command's `<path>` argument
-  resolves through first (`ctx index myapp` works once `myapp` is registered). This is CLI-only
-  and purely a naming convenience — it is NOT the daemon-side multi-project registry a future
-  `ctxd` would need to watch/serve several projects from one running process (ADR-0012's
-  documented gap, unrelated and still open); MCP's tools also don't resolve through it yet
-  (their `root` argument stays "absolute path" only, a natural, not-yet-done follow-up).
+- ~~No real multi-project management~~ — **fixed on both sides now**: `internal/project` (`ctx
+  project add/list/remove`) is the CLI-only name→path registry (ADR-0016); `ctxd` (ADR-0019) takes
+  multiple `<path>` arguments (each also resolved through that same registry) and watches all of
+  them concurrently, with `internal/httpserver` and the Web UI scoping every request to a
+  `?project=` and offering a live switcher. Still open: a `ctxd project add/list` that adds/removes
+  a project from an *already-running* daemon (today the project list is fixed at `ctxd` startup);
+  MCP's tools still don't resolve a registered name either (their `root` argument stays "absolute
+  path" only).
 
 ## Explicitly deferred (post-MVP, tracked not forgotten)
 
@@ -218,10 +221,12 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
   contains the tests that commit touched, ≥80% of the time — was not run; needs a real repo with
   meaningful history/coverage to validate against).
 - **Duplicate/Similarity Engine** (Phase 5) — the LSH funnel, the duplicate-decision UI concept.
-- **Web UI beyond ADR-0013/0015's scope** — entity classification/tagging, pattern identification
-  as a first-class surface, filtering as a cross-cutting primitive, a Duplicates view (blocked on
-  Phase 5), Projects/Settings (blocked on a multi-project registry), and live updates when
-  `ctxd`'s watcher reindexes. Full remaining ask in `docs/requirements/phase6-web-ui.md`.
+- **Web UI beyond ADR-0013/0015/0019's scope** — entity classification/tagging, pattern
+  identification as a first-class surface, filtering as a cross-cutting primitive, a Duplicates
+  view (blocked on Phase 5), and a Projects/Settings management page (add/remove a project from the
+  UI itself — today only the switcher exists; adding one still means `ctx project add` + restarting
+  `ctxd`). Multi-project watching and live updates on reindex are now done (ADR-0019, polling-based,
+  not push-based). Full remaining ask in `docs/requirements/phase6-web-ui.md`.
 - **Grafel-parity UI surfaces evaluated and explicitly not pursued** — Topology/Links (need
   multi-repo, Phase 7/9), Security/Taint/Dependency-Injection/Error-flow/Infrastructure/GraphQL
   (entire analysis domains never in this project's own scope — Grafel's, not Cartograph's, per
@@ -306,13 +311,22 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
     (daemon lifecycle state — started-at, watching, reindex count/reason/stats/error — deliberately
     separate from `internal/service`, which answers "what does the snapshot say" from any process,
     not "is this specific running daemon healthy"), surfaced at `/api/operations` through the
-    existing HTTP adapter (`ctxd --web`), 404 when no daemon is behind it. Not yet a CLI command or
-    a Web UI panel — both real, low-cost follow-ups, not bundled in to keep the change reviewable.
+    existing HTTP adapter (`ctxd --web`), 404 when no daemon is behind it. Since surfaced in the
+    Web UI too (item 15's TopBar operations badge), so it's no longer CLI/HTTP-only.
 
 This closes every item in the weighted "easy win" batch (Paths, Quality, Operations — ADR-0016/
 0017/0018) picked alongside the user in item 11 above.
 
-15. Next after that, per the deferred list above: C#/Python extractors (Phase 3b/3c), true
+15. ~~`ctxd` multi-project + a live Web UI project switcher~~ — done, ADR-0019, at the user's
+    explicit follow-up request: `ctxd` accepts multiple `<path>` arguments and watches them all
+    concurrently (one goroutine + `opstatus.Tracker` each); `internal/httpserver` gained
+    `?project=` scoping and `/api/projects`; the Web UI gained a `ProjectProvider`/`useProject()`
+    context, a `TopBar` project switcher, and 3-second polling (`usePoll`) for a "live, no manual
+    reload" feel while a watched project reindexes. Verified live: `cartograph` (this repo) and
+    `ts-basic` registered and watched together, switcher screenshot-confirmed scoping the entity
+    table correctly per project, and a real source edit to the watched fixture visibly updating
+    the already-open browser tab's entity count with no reload.
+16. Next after that, per the deferred list above: C#/Python extractors (Phase 3b/3c), true
     per-file incremental indexing, the similarity/duplicate engine (Phase 5), or the
     global-install/system-service work (Phase 9) — prioritized by real usage feedback, not by
     continuing to iterate against one synthetic fixture.

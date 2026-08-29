@@ -8,8 +8,10 @@
 import { useEffect, useState } from 'react'
 import { api, type Entity, type ImpactResult } from '@/lib/api'
 import { Badge } from '@/components/ui'
+import { useProject } from '@/lib/project-context'
 
 export function EntityImpactPanel({ name, file }: { name: string; file: string }) {
+  const { project } = useProject()
   const [result, setResult] = useState<ImpactResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -18,11 +20,11 @@ export function EntityImpactPanel({ name, file }: { name: string; file: string }
     setLoading(true)
     setError(null)
     api
-      .impact(name, file)
+      .impact(project, name, file)
       .then(setResult)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
-  }, [name, file])
+  }, [name, file, project])
 
   if (loading) return <p className="p-4 text-text-3 text-sm">Analyzing…</p>
   if (error) return <p className="p-4 text-danger text-sm">{error}</p>
