@@ -185,6 +185,82 @@ func TestUpstream_UnlimitedDepthFollowsFullChain(t *testing.T) {
 	}
 }
 
+func TestShortestPath_FindsMultiHopPath(t *testing.T) {
+	// d CALLS c CALLS b CALLS a — the shortest (only) path from a to d is
+	// a -> b -> c -> d, three hops, regardless of edge direction (a is
+	// only ever a Dst, never a Src, in this chain).
+	g := graph.New()
+	a := model.Entity{ID: model.NewEntityID("repo", model.KindFunction, "a.ts#a", "arity:0"), Kind: model.KindFunction, Name: "a"}
+	b := model.Entity{ID: model.NewEntityID("repo", model.KindFunction, "b.ts#b", "arity:0"), Kind: model.KindFunction, Name: "b"}
+	c := model.Entity{ID: model.NewEntityID("repo", model.KindFunction, "c.ts#c", "arity:0"), Kind: model.KindFunction, Name: "c"}
+	d := model.Entity{ID: model.NewEntityID("repo", model.KindFunction, "d.ts#d", "arity:0"), Kind: model.KindFunction, Name: "d"}
+	for _, e := range []model.Entity{a, b, c, d} {
+		g.AddEntity(e)
+	}
+	g.AddEdge(model.Edge{ID: "e1", Src: b.ID, Dst: a.ID, Kind: model.EdgeCalls, Provenance: model.ProvenanceDeterministic})
+	g.AddEdge(model.Edge{ID: "e2", Src: c.ID, Dst: b.ID, Kind: model.EdgeCalls, Provenance: model.ProvenanceDeterministic})
+	g.AddEdge(model.Edge{ID: "e3", Src: d.ID, Dst: c.ID, Kind: model.EdgeCalls, Provenance: model.ProvenanceDeterministic})
+	path := filepath.Join(t.TempDir(), "graph.bin")
+	if err := Write(path, "test-repo", g); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := snap.ShortestPath(a.ID, d.ID)
+	if !ok {
+		t.Fatal("expected a path from a to d")
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected a 3-hop path (b, c, d), got %d hops: %+v", len(got), got)
+	}
+	wantOrder := []model.EntityID{b.ID, c.ID, d.ID}
+	for i, want := range wantOrder {
+		if got[i].Entity.ID != want {
+			t.Errorf("hop %d: got %s, want %s", i, got[i].Entity.ID, want)
+		}
+		if got[i].Depth != i+1 {
+			t.Errorf("hop %d: got depth %d, want %d", i, got[i].Depth, i+1)
+		}
+	}
+}
+
+func TestShortestPath_NoPath_ReturnsFalse(t *testing.T) {
+	g := graph.New()
+	a := model.Entity{ID: model.NewEntityID("repo", model.KindFunction, "a.ts#a", "arity:0"), Kind: model.KindFunction, Name: "a"}
+	isolated := model.Entity{ID: model.NewEntityID("repo", model.KindFunction, "z.ts#z", "arity:0"), Kind: model.KindFunction, Name: "z"}
+	g.AddEntity(a)
+	g.AddEntity(isolated)
+	path := filepath.Join(t.TempDir(), "graph.bin")
+	if err := Write(path, "test-repo", g); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap.ShortestPath(a.ID, isolated.ID); ok {
+		t.Fatal("expected no path between two disconnected entities")
+	}
+}
+
+func TestShortestPath_SameEntity_ReturnsFalse(t *testing.T) {
+	g, aID, _ := buildTestGraph()
+	path := filepath.Join(t.TempDir(), "graph.bin")
+	if err := Write(path, "test-repo", g); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap.ShortestPath(aID, aID); ok {
+		t.Fatal("expected ok=false for start == target (not a real path)")
+	}
+}
+
 func TestWrite_DanglingEdgeDropped(t *testing.T) {
 	g := graph.New()
 	a := model.Entity{ID: model.NewEntityID("repo", model.KindFunction, "a.ts#foo", "arity:0"), Kind: model.KindFunction, Name: "foo"}

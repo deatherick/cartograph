@@ -307,3 +307,75 @@ func (s *Snapshot) Upstream(start model.EntityID, maxDepth int) []model.RelatedE
 	}
 	return out
 }
+
+// ShortestPath finds the shortest path from start to target — a BFS in
+// both directions (like Related, not just outgoing edges: "is there a
+// path at all" is usually more useful than "is there a path following
+// only calls", and a caller who wants directed-only reachability can
+// filter Via.Kind/direction from the result themselves). Returns the path
+// as an ordered list of hops from start to target INCLUSIVE of target
+// (never including start itself — the caller already has it), each
+// carrying the edge that reached it, and Depth set to its position in the
+// path (1-indexed). ok=false when no path exists within the snapshot, or
+// when start == target (a trivial, zero-length "path" is not a path).
+func (s *Snapshot) ShortestPath(start, target model.EntityID) ([]model.RelatedEntity, bool) {
+	if start == target || start == "" || target == "" {
+		return nil, false
+	}
+	type parent struct {
+		from model.EntityID
+		via  model.Edge
+	}
+	visited := map[model.EntityID]bool{start: true}
+	parents := map[model.EntityID]parent{}
+	frontier := []model.EntityID{start}
+	found := false
+
+	for len(frontier) > 0 && !found {
+		var next []model.EntityID
+		for _, cur := range frontier {
+			neighbors := append(s.FanOut(cur), s.FanIn(cur)...)
+			for _, edge := range neighbors {
+				nxt := edge.Dst
+				if nxt == cur || nxt == "" {
+					nxt = edge.Src
+				}
+				if nxt == "" || visited[nxt] {
+					continue
+				}
+				visited[nxt] = true
+				parents[nxt] = parent{from: cur, via: edge}
+				if nxt == target {
+					found = true
+				}
+				next = append(next, nxt)
+			}
+		}
+		frontier = next
+	}
+	if !found {
+		return nil, false
+	}
+
+	// Reconstruct the path backward from target to start, then reverse it
+	// into start->target order.
+	var reversed []model.RelatedEntity
+	for cur := target; cur != start; {
+		p, ok := parents[cur]
+		if !ok {
+			return nil, false // should not happen if found is true, but never guess
+		}
+		ent, ok := s.Lookup(cur)
+		if !ok {
+			return nil, false
+		}
+		reversed = append(reversed, model.RelatedEntity{Entity: ent, Via: p.via})
+		cur = p.from
+	}
+	out := make([]model.RelatedEntity, len(reversed))
+	for i, r := range reversed {
+		r.Depth = len(reversed) - i
+		out[len(reversed)-1-i] = r
+	}
+	return out, true
+}

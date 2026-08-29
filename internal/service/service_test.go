@@ -72,6 +72,51 @@ func TestService_Impact_TransitiveClosureAndCoveringTests(t *testing.T) {
 	}
 }
 
+func TestService_Path_FindsShortestChain(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "chain.ts"), []byte(impactFixtureSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := New()
+	repo := RepoName(root)
+	if _, err := svc.Index(t.Context(), root, repo); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	result, err := svc.Path(root, repo, "c", "", "a", "")
+	if err != nil {
+		t.Fatalf("Path: %v", err)
+	}
+	if !result.Found {
+		t.Fatal("expected a path from c to a")
+	}
+	if result.From.Name != "c" || result.To.Name != "a" {
+		t.Fatalf("got From=%q To=%q, want From=c To=a", result.From.Name, result.To.Name)
+	}
+	names := make([]string, len(result.Path))
+	for i, hop := range result.Path {
+		names[i] = hop.Entity.Name
+	}
+	if len(names) != 2 || names[0] != "b" || names[1] != "a" {
+		t.Errorf("expected path [b, a], got %+v", names)
+	}
+}
+
+func TestService_Path_AmbiguousName_Errors(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "chain.ts"), []byte(impactFixtureSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := New()
+	repo := RepoName(root)
+	if _, err := svc.Index(t.Context(), root, repo); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if _, err := svc.Path(root, repo, "nonexistent", "", "a", ""); err == nil {
+		t.Fatal("expected an error for an unmatched from-name")
+	}
+}
+
 func TestService_ImpactFromGitDiff_MapsChangedLinesToEntities(t *testing.T) {
 	root := t.TempDir()
 	runGit(t, root, "init", "-q")

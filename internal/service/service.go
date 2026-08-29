@@ -155,6 +155,36 @@ func (s *Service) Related(root, repo, name, fileHint string, maxDepth int) ([]mo
 	return snap.Related(match.ID, maxDepth), nil
 }
 
+// PathResult is the shortest chain of edges connecting two entities — the
+// answer to "how does A reach B" for two names an agent already knows,
+// rather than Related's "what's near A" or Impact's "what depends on A".
+type PathResult struct {
+	From  model.Entity
+	To    model.Entity
+	Path  []model.RelatedEntity // From -> ... -> To, in order; empty if Found is false
+	Found bool
+}
+
+// Path finds the shortest path (fewest hops, either edge direction, same
+// semantics as Related/Upstream) from the entity named fromName to the
+// entity named toName, erroring if either name is ambiguous or unmatched.
+func (s *Service) Path(root, repo, fromName, fromFileHint, toName, toFileHint string) (PathResult, error) {
+	snap, err := s.open(root, repo)
+	if err != nil {
+		return PathResult{}, err
+	}
+	from, err := findUnique(snap, fromName, fromFileHint)
+	if err != nil {
+		return PathResult{}, err
+	}
+	to, err := findUnique(snap, toName, toFileHint)
+	if err != nil {
+		return PathResult{}, err
+	}
+	path, ok := snap.ShortestPath(from.ID, to.ID)
+	return PathResult{From: from, To: to, Path: path, Found: ok}, nil
+}
+
 // Inspection is everything ctx inspect shows for one entity: the entity
 // itself plus its fan-in/fan-out edges — the graph data the master plan's
 // Phase 1 scope names explicitly (fan_in/fan_out) and that was previously

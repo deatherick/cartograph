@@ -55,6 +55,8 @@ func main() {
 		err = runStats(svc, os.Args[2:])
 	case "impact":
 		err = runImpact(svc, os.Args[2:])
+	case "path":
+		err = runPath(svc, os.Args[2:])
 	case "project":
 		err = runProject(os.Args[2:])
 	default:
@@ -82,6 +84,7 @@ Usage:
   ctx stats <path>              print snapshot summary (reads snapshot)
   ctx impact <path> <name> [--depth N] [--file <substring>]   blast radius: what depends on this
   ctx impact <path> --git-diff [ref]   blast radius of every entity a git diff touched (default: HEAD)
+  ctx path <path> <fromName> <toName> [--from-file <sub>] [--to-file <sub>]   shortest path between two entities
   ctx project add <name> <path>    register <path> under <name>
   ctx project list                 show every registered project
   ctx project remove <name>        unregister <name>
@@ -412,6 +415,19 @@ func runImpact(svc *service.Service, args []string) error {
 		return err
 	}
 	fmt.Print(render.Impact(result))
+	return nil
+}
+
+func runPath(svc *service.Service, args []string) error {
+	if len(args) < 3 {
+		return fmt.Errorf("usage: ctx path <path> <fromName> <toName> [--from-file <substring>] [--to-file <substring>]")
+	}
+	root, fromName, toName := project.Resolve(args[0]), args[1], args[2]
+	result, err := svc.Path(root, service.RepoName(root), fromName, flagValue(args, "--from-file"), toName, flagValue(args, "--to-file"))
+	if err != nil {
+		return err
+	}
+	fmt.Print(render.Path(result))
 	return nil
 }
 

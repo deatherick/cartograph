@@ -82,6 +82,12 @@ func New(svc *service.Service) *mcp.Server {
 			"to analyze uncommitted/recent changes instead.",
 	}, impactHandler(svc))
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "context_path",
+		Description: "Shortest path (fewest graph hops) from one named entity to another — how does " +
+			"A reach B, following calls/uses/extends/implements in either direction.",
+	}, pathHandler(svc))
+
 	return server
 }
 
@@ -249,5 +255,23 @@ func impactHandler(svc *service.Service) mcp.ToolHandlerFor[impactArgs, impactRe
 			return errorResult[impactResult](err)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Impact(result)}}}, impactResult{Impact: &result}, nil
+	}
+}
+
+type pathArgs struct {
+	Root     string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	From     string `json:"from" jsonschema:"bare name of the entity to start from"`
+	FromFile string `json:"from_file,omitempty" jsonschema:"substring to disambiguate when from matches entities in more than one file"`
+	To       string `json:"to" jsonschema:"bare name of the entity to reach"`
+	ToFile   string `json:"to_file,omitempty" jsonschema:"substring to disambiguate when to matches entities in more than one file"`
+}
+
+func pathHandler(svc *service.Service) mcp.ToolHandlerFor[pathArgs, service.PathResult] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args pathArgs) (*mcp.CallToolResult, service.PathResult, error) {
+		result, err := svc.Path(args.Root, service.RepoName(args.Root), args.From, args.FromFile, args.To, args.ToFile)
+		if err != nil {
+			return errorResult[service.PathResult](err)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Path(result)}}}, result, nil
 	}
 }

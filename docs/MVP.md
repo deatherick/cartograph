@@ -226,10 +226,9 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
   multi-repo, Phase 7/9), Security/Taint/Dependency-Injection/Error-flow/Infrastructure/GraphQL
   (entire analysis domains never in this project's own scope — Grafel's, not Cartograph's, per
   the master plan), a background-enrichment "Pending" queue (a different processing paradigm than
-  `ctxd`'s simple watch-and-reindex). **Paths** (shortest path between two entities — cheap, this
-  project already has the BFS infra) and **Docs** (rendering `Entity.DocSummary`, a field that
-  exists but no extractor populates yet) were identified as real, low-cost additions worth
-  revisiting.
+  `ctxd`'s simple watch-and-reindex). **Paths** (shortest path between two entities) has since been
+  built — see item 12 below. **Docs** (rendering `Entity.DocSummary`, a field that exists but no
+  extractor populates yet) remains identified as a real, low-cost addition worth revisiting.
 - **Cross-repo linking, learned relationships, agent policy files** (Phase 7).
 - **Optional AI provider integration, Ask AI** (Phase 8).
 - **Hardening, installer, distribution** (Phase 9) — global install (`ctx`/`ctxd` on `PATH`, no
@@ -293,8 +292,12 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
       strength after measuring full-strength regressed the synthetic fixture below its exit
       criterion). Real repo recall 0.47→0.50; synthetic fixture recall 0.87→0.85 (still passing,
       thinner margin — documented, not hidden). See `docs/benchmarks/2026-08-29-idf-seeding.md`.
-12. Next after that: the "easy win" Grafel-inspired surfaces identified but not yet built (Paths —
-    shortest path between two entities, cheap given existing BFS infra; Quality — persisting and
+12. ~~Paths (shortest path between two entities)~~ — done: `internal/store.ShortestPath`
+    (bidirectional BFS over `FanOut`/`FanIn`, same "either direction" semantics as `Related`, with
+    parent-pointer path reconstruction), wired through the full stack — `service.Path`, `ctx path
+    <path> <fromName> <toName>` (CLI), `context_path` (MCP), `render.Path`. Verified with a real
+    3-hop call chain fixture (service→service test) and end-to-end through MCP (mcpserver_test.go).
+13. Next after that: the remaining "easy win" Grafel-inspired surfaces (Quality — persisting and
     surfacing the `bug_rate`/disposition breakdown already computed at index time but not
     persisted; Operations — `ctxd`'s own watch/reindex status) — or, per the deferred list above,
     C#/Python extractors (Phase 3b/3c), true per-file incremental indexing, the similarity/

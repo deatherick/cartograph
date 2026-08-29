@@ -161,6 +161,21 @@ func Impact(r service.ImpactResult) string {
 	return b.String()
 }
 
+// Path renders the shortest chain of edges connecting two entities, one hop
+// per line, or a clear "no path" message when Found is false.
+func Path(r service.PathResult) string {
+	if !r.Found {
+		return fmt.Sprintf("no path found from %s %s to %s %s\n", r.From.Kind, r.From.Qualified, r.To.Kind, r.To.Qualified)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s\n", r.From.Kind, r.From.Qualified)
+	for _, hop := range r.Path {
+		fmt.Fprintf(&b, "  --[%s, conf=%.2f]--> %s %s\n", hop.Via.Kind, hop.Via.Confidence, hop.Entity.Kind, hop.Entity.Qualified)
+	}
+	fmt.Fprintf(&b, "(%d hop(s))\n", len(r.Path))
+	return b.String()
+}
+
 // GitDiffImpact renders the aggregated blast radius of every entity a
 // `git diff` touched.
 func GitDiffImpact(r service.GitDiffImpact) string {

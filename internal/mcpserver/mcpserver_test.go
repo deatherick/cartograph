@@ -169,6 +169,22 @@ func TestMCPServer_Impact(t *testing.T) {
 	}
 }
 
+func TestMCPServer_Path(t *testing.T) {
+	cs := connect(t)
+	root := fixtureRoot(t)
+	callTool(t, cs, "context_index", map[string]any{"root": root})
+
+	res := callTool(t, cs, "context_path", map[string]any{
+		"root": root, "from": "register", "from_file": "services", "to": "assertValidEmail",
+	})
+	if res.IsError {
+		t.Fatalf("context_path returned an error: %s", textOf(t, res))
+	}
+	if !strings.Contains(textOf(t, res), "assertValidEmail") {
+		t.Errorf("expected path output to mention the target entity, got: %s", textOf(t, res))
+	}
+}
+
 func TestMCPServer_Compile(t *testing.T) {
 	cs := connect(t)
 	root := fixtureRoot(t)
@@ -236,6 +252,7 @@ func TestMCPServer_StructuredContentIsAlwaysAnObject(t *testing.T) {
 		{"context_source", map[string]any{"root": root, "name": "register", "file": "services"}},
 		{"context_compile", map[string]any{"root": root, "task": "UserService register", "budget": 500}},
 		{"context_impact", map[string]any{"root": root, "name": "UserService", "file": "services"}},
+		{"context_path", map[string]any{"root": root, "from": "UserService", "from_file": "services", "to": "UserService", "to_file": "services"}},
 	}
 	for _, c := range cases {
 		t.Run(c.tool, func(t *testing.T) {
