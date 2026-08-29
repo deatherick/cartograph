@@ -12,15 +12,15 @@
 package service
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/deatherick/cartograph/internal/compile"
 	"github.com/deatherick/cartograph/internal/index"
 	"github.com/deatherick/cartograph/internal/model"
+	"github.com/deatherick/cartograph/internal/srcread"
 	"github.com/deatherick/cartograph/internal/store"
 )
 
@@ -69,7 +69,7 @@ func (s *Service) open(root, repo string) (*store.Snapshot, error) {
 // (docs/research/09) without a dedicated internal/search package — a
 // linear scan over snap.All() is adequate at today's scale (tens to low
 // thousands of entities). Fuzzy/full-text search (FTS5) is explicitly
-// deferred; see docs/adr/0006-search-scope.md for why.
+// deferred; see docs/adr/0006-phase1-completion-and-search-scope.md for why.
 func (s *Service) Find(root, repo, name string) ([]model.Entity, error) {
 	snap, err := s.open(root, repo)
 	if err != nil {
@@ -179,39 +179,22 @@ func (s *Service) Source(root, repo, name, fileHint string) (string, model.Entit
 	if err != nil {
 		return "", model.Entity{}, err
 	}
-	src, err := readLines(filepath.Join(root, filepath.FromSlash(match.Anchor.File)), match.Anchor.StartLine, match.Anchor.EndLine)
+	src, err := srcread.Lines(filepath.Join(root, filepath.FromSlash(match.Anchor.File)), match.Anchor.StartLine, match.Anchor.EndLine)
 	if err != nil {
 		return "", model.Entity{}, fmt.Errorf("service: reading source for %s: %w", match.Qualified, err)
 	}
 	return src, match, nil
 }
 
-func readLines(path string, startLine, endLine int) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-
-	var out strings.Builder
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for scanner.Scan() {
-		line++
-		if line < startLine {
-			continue
-		}
-		if line > endLine {
-			break
-		}
-		out.WriteString(scanner.Text())
-		out.WriteByte('\n')
-	}
-	if err := scanner.Err(); err != nil {
-		return "", err
-	}
-	return out.String(), nil
+// Context compiles a token-budgeted capsule for task — the Context
+// Compiler's entry point (internal/compile), the product's central
+// feature (see the master plan's Phase 2 framing). sessionID enables the
+// Context Ledger: repeat calls with the same non-empty sessionID cost
+// fewer tokens for anything already delivered. Requires a snapshot to
+// already exist (same "run ctx index first" contract as every other read
+// path).
+func (s *Service) Context(root, repo, task string, budget int, sessionID string) (*compile.Capsule, error) {
+	return compile.Compile(root, repo, task, compile.Options{Budget: budget, SessionID: sessionID})
 }
 
 // Stats loads the persisted snapshot and returns summary counts — a

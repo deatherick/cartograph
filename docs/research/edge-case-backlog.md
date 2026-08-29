@@ -133,3 +133,4 @@ reference is their issue number, kept as traceability for where the case came fr
 | I8 | A capsule with residuals shows the disambiguation candidates |
 | I9 | Two indexings of the same source produce a byte-identical snapshot (determinism) |
 | I10 | Reordering the input files doesn't change the output |
+| I11 | **Object/schema-style `const` declarations are never extracted as entities** (`const User = model('User', UserSchema)`) — measured root cause of the Context Compiler's real-repo recall gap (0.47 vs the 0.85 target; the synthetic fixture passes at 0.87): with so little indexed in files like this, graph expansion has almost nowhere to go. Extends the `methodassign` pattern already built for the same repo's `.methods.` idiom. See docs/adr/0007-context-compiler-vertical-slice.md and docs/benchmarks/2026-08-29-phase2-capsule-realworld-ts.md |

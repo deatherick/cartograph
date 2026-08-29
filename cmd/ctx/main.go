@@ -1,8 +1,8 @@
 // Command ctx is the CLI for the context engine. Phase 1 implements the
 // static-map subcommands: `index` runs the full pipeline and persists a
 // snapshot (internal/store); find/related/stats read that snapshot
-// instead of re-indexing. Phase 2 adds context/expand/session once the
-// Context Compiler exists.
+// instead of re-indexing. Phase 2 adds `context`, wired to
+// internal/compile — the Context Compiler.
 package main
 
 import (
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/deatherick/cartograph/internal/compile"
 	"github.com/deatherick/cartograph/internal/index"
 	"github.com/deatherick/cartograph/internal/model"
 	"github.com/deatherick/cartograph/internal/service"
@@ -31,6 +32,8 @@ func main() {
 	switch os.Args[1] {
 	case "index":
 		err = runIndex(svc, os.Args[2:])
+	case "context":
+		err = runContext(svc, os.Args[2:])
 	case "find":
 		err = runFind(svc, os.Args[2:])
 	case "inspect":
@@ -56,6 +59,7 @@ func usage() {
 
 Usage:
   ctx index <path>              index a repo, persist a snapshot, print run stats
+  ctx context <path> "<task>" --budget N [--session ID]   compile a token-budgeted capsule
   ctx find <path> <name>        find every entity with this bare name (reads snapshot)
   ctx inspect <path> <name>     full detail on one entity: signature, fan-in, fan-out
   ctx related <path> <name> [--depth N]   entities within N hops (reads snapshot)
@@ -101,6 +105,72 @@ func runIndex(svc *service.Service, args []string) error {
 	}
 	printIndexStats(stats)
 	return nil
+}
+
+func runContext(svc *service.Service, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf(`usage: ctx context <path> "<task>" [--budget N] [--session ID]`)
+	}
+	root, task := args[0], args[1]
+	budget := 2500
+	if v := flagValue(args, "--budget"); v != "" {
+		if b, perr := strconv.Atoi(v); perr == nil {
+			budget = b
+		}
+	}
+	session := flagValue(args, "--session")
+
+	capsule, err := svc.Context(root, repoName(root), task, budget, session)
+	if err != nil {
+		return err
+	}
+	printCapsule(capsule)
+	return nil
+}
+
+// printCapsule renders the token-dense capsule format the project plan
+// specifies — stable and parseable, not prose, so an agent (or a human
+// scanning quickly) can find PRIMARY/RELATED sections and expand handles.
+func printCapsule(c *compile.Capsule) {
+	fmt.Printf("TASK  %s\n", c.Task)
+	sessionPart := ""
+	if c.SessionID != "" {
+		sessionPart = " · SESSION " + c.SessionID
+	}
+	fmt.Printf("BUDGET %d · USED %d · CONSIDERED %d%s\n\n", c.Budget, c.Used, c.Considered, sessionPart)
+
+	printSection(c, "primary", "PRIMARY")
+	printSection(c, "related", "RELATED")
+
+	if len(c.Items) == 0 {
+		fmt.Println("(no relevant entities found for this task)")
+	}
+}
+
+func printSection(c *compile.Capsule, category, header string) {
+	var items []compile.Item
+	for _, it := range c.Items {
+		if it.Category == category {
+			items = append(items, it)
+		}
+	}
+	if len(items) == 0 {
+		return
+	}
+	fmt.Println(header)
+	for _, it := range items {
+		tag := ""
+		if it.AlreadySent {
+			tag = " [already sent — handle: " + it.Handle + "]"
+		}
+		fmt.Printf("%-4s %-9s %-45s [%s, %d tok]%s\n", it.Handle, it.Entity.Kind, it.Entity.Qualified, it.Level, it.Tokens, tag)
+		if !it.AlreadySent && it.Level != compile.LevelName {
+			for _, line := range strings.Split(strings.TrimRight(it.Text, "\n"), "\n") {
+				fmt.Printf("     %s\n", line)
+			}
+		}
+	}
+	fmt.Println()
 }
 
 func runFind(svc *service.Service, args []string) error {

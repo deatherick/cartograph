@@ -24,6 +24,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -33,7 +34,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/deatherick/cartograph/internal/compile"
 	"github.com/deatherick/cartograph/internal/exclude"
+	"github.com/deatherick/cartograph/internal/index"
+	"github.com/deatherick/cartograph/internal/store"
 	"github.com/deatherick/cartograph/internal/tokencount"
 )
 
@@ -56,22 +60,24 @@ type taskSet struct {
 }
 
 type taskResult struct {
-	ID               string
-	TracedTokens     int
-	OracleTokens     int
-	GoldFileCount    int
-	EstimatorRatio   float64 // char/4 estimate ÷ real tokenizer count, on gold files combined
-	Err              string
+	ID             string
+	TracedTokens   int
+	OracleTokens   int
+	GoldFileCount  int
+	EstimatorRatio float64 // char/4 estimate ÷ real tokenizer count, on gold files combined
+	Err            string
 }
 
 func main() {
 	baseline := flag.Bool("baseline", false, "compute and report baseline token cost (grep+read) for the task set")
+	capsule := flag.Bool("capsule", false, "compute and report Context Compiler capsule cost, recall@gold, and precision@gold for the task set")
+	budgetFlag := flag.Int("budget", 2500, "token budget per task for --capsule")
 	tasksPath := flag.String("tasks", "fixtures/tasks/ts-basic.json", "path to the task set JSON")
 	fixturesRoot := flag.String("fixtures-root", "fixtures", "root directory containing named fixtures")
 	flag.Parse()
 
-	if !*baseline {
-		fmt.Fprintln(os.Stderr, "ctxbench: no mode selected. Use --baseline. (--capsule arrives with the Context Compiler in Phase 2.)")
+	if !*baseline && !*capsule {
+		fmt.Fprintln(os.Stderr, "ctxbench: no mode selected. Use --baseline and/or --capsule.")
 		os.Exit(2)
 	}
 
@@ -82,13 +88,33 @@ func main() {
 	}
 
 	fixtureDir := filepath.Join(*fixturesRoot, ts.Fixture)
-	results := make([]taskResult, 0, len(ts.Tasks))
-	for _, t := range ts.Tasks {
-		r := runTask(fixtureDir, t)
-		results = append(results, r)
+
+	var baselineResults []taskResult
+	if *baseline {
+		baselineResults = make([]taskResult, 0, len(ts.Tasks))
+		for _, t := range ts.Tasks {
+			baselineResults = append(baselineResults, runTask(fixtureDir, t))
+		}
 	}
 
-	printReport(ts, results)
+	var capsuleResults []capsuleResult
+	if *capsule {
+		capsuleResults, err = runCapsuleMode(fixtureDir, ts, *budgetFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ctxbench: --capsule: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	if *baseline {
+		printReport(ts, baselineResults)
+	}
+	if *capsule {
+		if *baseline {
+			fmt.Println()
+		}
+		printCapsuleReport(ts, capsuleResults, *budgetFlag, baselineResults)
+	}
 }
 
 func loadTaskSet(path string) (*taskSet, error) {
@@ -181,6 +207,139 @@ func readGoldFiles(fixtureDir string, goldFiles []string) (tokens int, combined 
 	}
 	combined = sb.String()
 	return tokencount.Count(combined), combined, nil
+}
+
+type capsuleResult struct {
+	ID         string
+	Tokens     int
+	RecallGold float64 // fraction of gold_files with >=1 capsule item
+	Precision  float64 // fraction of capsule items whose file is in gold_files
+	ItemCount  int
+	Err        string
+}
+
+// runCapsuleMode freshly indexes fixtureDir (so the benchmark never
+// measures against a stale snapshot from a previous run) and compiles a
+// capsule for every task, computing recall@gold/precision@gold against
+// the same gold_files used by --baseline. Every capsule call uses no
+// session (SessionID: "") — the Context Ledger's savings are a separate,
+// multi-call dimension this per-task benchmark does not measure; see
+// docs/research/06-token-measurement.md's note that ledger savings need
+// their own measurement.
+func runCapsuleMode(fixtureDir string, ts *taskSet, budget int) ([]capsuleResult, error) {
+	result, err := index.Run(context.Background(), fixtureDir, ts.Fixture)
+	if err != nil {
+		return nil, fmt.Errorf("indexing %s: %w", fixtureDir, err)
+	}
+	snapPath, err := store.SnapshotPath(fixtureDir, ts.Fixture)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Write(snapPath, ts.Fixture, result.Graph); err != nil {
+		return nil, fmt.Errorf("writing snapshot: %w", err)
+	}
+
+	out := make([]capsuleResult, 0, len(ts.Tasks))
+	for _, t := range ts.Tasks {
+		cr := capsuleResult{ID: t.ID}
+		capsule, cerr := compile.Compile(fixtureDir, ts.Fixture, t.Prompt, compile.Options{Budget: budget})
+		if cerr != nil {
+			cr.Err = cerr.Error()
+			out = append(out, cr)
+			continue
+		}
+		cr.Tokens = capsule.Used
+		cr.ItemCount = len(capsule.Items)
+		cr.RecallGold, cr.Precision = scoreAgainstGold(capsule, t.GoldFiles)
+		out = append(out, cr)
+	}
+	return out, nil
+}
+
+// scoreAgainstGold computes recall@gold (fraction of gold_files with at
+// least one capsule item from that file) and precision@gold (fraction of
+// capsule items whose file is one of the gold_files). Gold sets are
+// whole-file, per fixtures/tasks/*.json's own documented V0 granularity —
+// see that file's "note" field — so both metrics operate at file
+// resolution, not per-entity/per-line.
+func scoreAgainstGold(cap *compile.Capsule, goldFiles []string) (recall, precision float64) {
+	gold := map[string]bool{}
+	for _, f := range goldFiles {
+		gold[filepath.ToSlash(f)] = true
+	}
+	covered := map[string]bool{}
+	inGoldCount := 0
+	for _, it := range cap.Items {
+		f := filepath.ToSlash(it.Entity.Anchor.File)
+		if gold[f] {
+			covered[f] = true
+			inGoldCount++
+		}
+	}
+	if len(gold) > 0 {
+		recall = float64(len(covered)) / float64(len(gold))
+	}
+	if len(cap.Items) > 0 {
+		precision = float64(inGoldCount) / float64(len(cap.Items))
+	}
+	return recall, precision
+}
+
+func printCapsuleReport(ts *taskSet, results []capsuleResult, budget int, baselineResults []taskResult) {
+	fmt.Printf("# Context Compiler capsule report — fixture %q, budget %d\n\n", ts.Fixture, budget)
+	fmt.Println("| Task | Capsule tokens | Items | recall@gold | precision@gold |")
+	fmt.Println("|---|---:|---:|---:|---:|")
+
+	var sumTokens, sumItems int
+	var sumRecall, sumPrecision float64
+	failed := 0
+	scored := 0
+	for _, r := range results {
+		if r.Err != "" {
+			fmt.Printf("| %s | — | — | — | ERROR: %s |\n", r.ID, r.Err)
+			failed++
+			continue
+		}
+		fmt.Printf("| %s | %d | %d | %.2f | %.2f |\n", r.ID, r.Tokens, r.ItemCount, r.RecallGold, r.Precision)
+		sumTokens += r.Tokens
+		sumItems += r.ItemCount
+		sumRecall += r.RecallGold
+		sumPrecision += r.Precision
+		scored++
+	}
+
+	fmt.Println()
+	fmt.Printf("Total capsule tokens: %d\n", sumTokens)
+	if scored > 0 {
+		avgRecall := sumRecall / float64(scored)
+		avgPrecision := sumPrecision / float64(scored)
+		fmt.Printf("Average recall@gold:    %.2f\n", avgRecall)
+		fmt.Printf("Average precision@gold: %.2f\n", avgPrecision)
+
+		if baselineResults != nil {
+			var baselineTraced int
+			for _, br := range baselineResults {
+				baselineTraced += br.TracedTokens
+			}
+			if baselineTraced > 0 {
+				reduction := 1 - float64(sumTokens)/float64(baselineTraced)
+				fmt.Println()
+				fmt.Printf("Reduction vs traced baseline: %.1f%% (capsule %d tok vs baseline %d tok)\n", reduction*100, sumTokens, baselineTraced)
+				fmt.Printf("Phase 2 exit criterion: >=70%% reduction AND recall@gold >=0.85 — this run: %.1f%% reduction, %.2f recall %s\n",
+					reduction*100, avgRecall, passFail(reduction >= 0.70 && avgRecall >= 0.85))
+			}
+		}
+	}
+	if failed > 0 {
+		fmt.Printf("\n%d task(s) failed to compile — see ERROR rows above.\n", failed)
+	}
+}
+
+func passFail(ok bool) string {
+	if ok {
+		return "[PASS]"
+	}
+	return "[FAIL]"
 }
 
 func printReport(ts *taskSet, results []taskResult) {
