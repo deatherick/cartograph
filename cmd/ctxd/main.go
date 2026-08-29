@@ -30,26 +30,43 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/deatherick/cartograph/internal/httpserver"
 	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
 	"github.com/deatherick/cartograph/internal/watch"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: ctxd <path>")
+	webAddr := flag.String("web", "127.0.0.1:7420", "address to serve the web UI on (127.0.0.1-only by default — see the project plan's permanent 'bind to localhost' restriction); empty disables it")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: ctxd [--web addr] <path>")
 		fmt.Fprintln(os.Stderr, "\nIndexes <path> once, then watches it and re-indexes on every change until interrupted (Ctrl+C).")
+		fmt.Fprintln(os.Stderr, "Also serves a web UI (Phase 6) at --web (default 127.0.0.1:7420) unless --web=\"\".")
 		os.Exit(2)
 	}
-	root := os.Args[1]
+	root := args[0]
 	svc := service.New()
 	repo := service.RepoName(root)
+
+	if *webAddr != "" {
+		go func() {
+			handler := httpserver.New(svc, root, repo)
+			fmt.Printf("ctxd: web UI at http://%s\n", *webAddr)
+			if err := http.ListenAndServe(*webAddr, handler); err != nil { //nolint:gosec // 127.0.0.1 default binding is the security boundary here, not timeouts on a local single-user dev tool
+				fmt.Fprintf(os.Stderr, "ctxd: web UI server error: %v\n", err)
+			}
+		}()
+	}
 
 	reindex := func(reason string) {
 		fmt.Printf("ctxd: %s — indexing %s\n", reason, root)

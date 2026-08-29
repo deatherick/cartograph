@@ -6,7 +6,29 @@ in a chat transcript. See the project plan's Phase 6 section for the phase's exi
 (Overview, Search palette, Entity inspector, Duplicates, Impact, Graph, Projects/Settings) — the
 items below are the concrete asks that section should be checked against when Phase 6 begins.
 
-## Status at time of capture
+## Status update (2026-08-29, later the same day): V0 slice shipped — ADR-0013
+
+Everything this section originally listed as a precondition now exists (persistence, a daemon,
+resolvers for two languages), except Phase 4/5 (impact analysis, duplicate detection). At the
+user's explicit direction ("quiero que logremos llegar al punto de la visualización web") a first
+web UI slice was built rather than waiting for every precondition:
+
+- **Shipped**: Overview (entity/edge counts, per-Kind breakdown), Search (client-side substring
+  filter over the fetched entity list, jumping to the server's exact-match `/api/find`/`/api/inspect`
+  for the actual lookup), Entity Inspector (fan-in/fan-out, source view), and a bounded Graph view
+  (one entity's neighborhood via `/api/related`, rendered with a small hand-written force layout —
+  **not** cosmos.gl/React Flow/elkjs as this document originally described Grafel using; see
+  ADR-0013 for why a dependency-light, `go build`-only stack was chosen instead).
+- **Still not built, and still blocked on their own phases**: Duplicates (#5 below, needs Phase 5),
+  Impact (needs Phase 4), manual entity classification/tagging (#4 below), pattern identification
+  as a first-class surface (#5 below, beyond the Kind breakdown card), filtering as a persistent
+  cross-cutting capability (#8 below — today's search box is the only filter), and Projects/
+  Settings (needs the multi-project registry `cmd/ctxd` doesn't have yet).
+
+The remainder of this document is the original, unedited capture — read it as "the full ask,"
+not "what shipped."
+
+## Status at time of original capture
 
 Not started. Phase 1 (parser/resolver/in-memory graph/CLI) is a working vertical slice with no
 persistence yet. There is no daemon, no HTTP layer, no MCP server, and nothing to render — Phase

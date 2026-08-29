@@ -8,12 +8,15 @@ alike. The idea: `grep` → read file → `grep` → read 8 more files → guess
 discover the duplicate later becomes graph → ranked context capsule → 2-3 targeted reads →
 grep to verify.
 
-**Status**: MVP shipped (Phase 2) plus Go support (Phase 3a) — TypeScript and Go extraction/
-resolution, the Context Compiler, and an MCP server are all built, tested, and measured against
-both a real coding agent (ADR-0009) and this project's own real Go source (ADR-0010: 0.1%
-bug_rate self-hosting on Cartograph's own ~9,500-line codebase). See [`docs/MVP.md`](docs/MVP.md)
-for the full picture and [`docs/adr/`](docs/adr/) for how every decision was made. Functional via
-CLI and MCP today. Not yet daemonized, and C#/Python are still ahead — see the
+**Status**: MVP shipped (Phase 2), plus Go support (Phase 3a), a plug-and-play language
+architecture (Phase 3a′), a daemon watcher (Phase 3d V0), and a first web UI slice (Phase 6 V0) —
+TypeScript and Go extraction/resolution, the Context Compiler, an MCP server, `ctxd` (index once,
+then watch and re-index on change), and a browser UI (Overview/Search/Entity Inspector/bounded
+Graph) are all built, tested, and measured against both a real coding agent (ADR-0009) and this
+project's own real source (ADR-0010: 0.1% bug_rate self-hosting). See
+[`docs/MVP.md`](docs/MVP.md) for the full picture and [`docs/adr/`](docs/adr/) for how every
+decision was made. Functional via CLI, MCP, and now a browser today. C#/Python extraction, true
+per-file incremental indexing, and global system-level install are still ahead — see the
 [known limitations](#known-limitations) below.
 
 ## Prerequisites
@@ -128,6 +131,22 @@ deliberate, measured scoping choice, not an oversight) and doesn't yet run as a 
 service — see
 [`docs/requirements/phase9-global-install-and-daemon.md`](docs/requirements/phase9-global-install-and-daemon.md)
 for that design, captured but not built yet.
+
+### Web UI
+
+`ctxd` also serves a browser UI by default, at `http://127.0.0.1:7420` (change with `--web
+addr`, or disable with `--web ""`):
+
+```bash
+./bin/ctxd ~/path/to/some/project
+# then open http://127.0.0.1:7420 in a browser
+```
+
+Overview (entity/edge counts, a breakdown by kind), a search box, an entity inspector (fan-in/
+fan-out, source view), and a bounded graph view (one entity's neighborhood, never the whole repo
+at once). Plain HTML/CSS/JS embedded in the `ctxd` binary — no Node.js/npm/build step, by choice
+(see [ADR-0013](docs/adr/0013-web-ui-v0.md)). Duplicates and Impact views aren't built yet — they
+need Phase 4/5 (impact analysis, similarity engine), neither of which exists.
 
 ## Using it from a coding agent (MCP)
 

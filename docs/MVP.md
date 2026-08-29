@@ -18,7 +18,9 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 3a′ — Plug-and-play language architecture, init wizard | ✅ Done (ADR-0011) — `LanguagePolicy` interface, `.cartograph.json`, `ctx init`/`ctx languages` |
 | 3b/3c — C#, Python extractors | ⬜ Post-MVP (now a drop-in addition per ADR-0011, not a core rewrite) |
 | 3d — Daemon watcher (V0: full reindex on change, not per-file incremental) | ✅ Done (ADR-0012) — `internal/watch` + real `cmd/ctxd`, verified end-to-end |
-| 4-9 — Impact analysis, duplicates, Web UI, cross-repo, AI, hardening | ⬜ Post-MVP |
+| 6 (V0) — Web UI: Overview, Search, Entity Inspector, bounded Graph | ✅ Done (ADR-0013) — served by `ctxd --web`, vanilla HTML/JS, no build step |
+| 4/5 — Impact analysis, duplicate/similarity engine (Web UI's Duplicates/Impact views depend on these) | ⬜ Post-MVP |
+| 7-9 — Cross-repo, learned relationships, AI, hardening | ⬜ Post-MVP |
 
 ## What "MVP" means for this project
 
@@ -195,9 +197,11 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
   purposes — projects, decisions, ledger persistence, metrics).
 - **Impact analysis + git awareness** (Phase 4) — `ctx impact`, git-diff-driven blast radius.
 - **Duplicate/Similarity Engine** (Phase 5) — the LSH funnel, the duplicate-decision UI concept.
-- **Web UI** (Phase 6) — requirements already captured in `docs/requirements/phase6-web-ui.md`
-  (visual graph, entity classification/tagging, pattern identification, quantification, filtering
-  as a cross-cutting primitive).
+- **Web UI beyond the V0 slice** (Phase 6, ADR-0013 shipped Overview/Search/Inspector/bounded
+  Graph) — entity classification/tagging, pattern identification as a first-class surface,
+  filtering as a cross-cutting primitive, Duplicates/Impact views (blocked on Phase 4/5),
+  Projects/Settings (blocked on a multi-project registry), and live updates when `ctxd`'s watcher
+  reindexes. Full remaining ask in `docs/requirements/phase6-web-ui.md`.
 - **Cross-repo linking, learned relationships, agent policy files** (Phase 7).
 - **Optional AI provider integration, Ask AI** (Phase 8).
 - **Hardening, installer, distribution** (Phase 9) — global install (`ctx`/`ctxd` on `PATH`, no
@@ -229,8 +233,15 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
    and re-indexes automatically on change (full reindex, not yet per-file incremental — a
    measured, documented scoping choice), verified end-to-end against a real fixture (entity count
    moving 4→5 after a live content change with zero manual `ctx index` re-run).
-8. Next up, per the deferred list above: C#/Python extractors (Phase 3b/3c — now a drop-in
-   addition per ADR-0011, not a core rewrite), true per-file incremental indexing, or the
+8. ~~Web UI V0~~ — done, ADR-0013: `internal/service.Graph` + `internal/httpserver` (a thin HTTP
+   adapter, same "no duplicated logic" rule as MCP) + an embedded vanilla-JS frontend (no Node/
+   build step — the user's explicit choice over React+TS), served by `ctxd --web`. Overview,
+   Search, Entity Inspector, and a bounded (never whole-repo) Graph view, verified end-to-end
+   against this project's own self-hosted source. Duplicates/Impact stay deferred — no Phase 4/5
+   data exists yet to show in them.
+9. Next up, per the deferred list above: C#/Python extractors (Phase 3b/3c — now a drop-in
+   addition per ADR-0011, not a core rewrite), true per-file incremental indexing, impact analysis
+   or the similarity engine (Phase 4/5, unblocking the Web UI's remaining views), or the
    global-install/system-service work (Phase 9, requirements already captured) — prioritized by
    real usage feedback, not by continuing to iterate on ranker constants against one synthetic
    fixture.

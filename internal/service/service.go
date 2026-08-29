@@ -229,3 +229,30 @@ func (s *Service) Stats(root, repo string) (Stats, error) {
 	}
 	return Stats{Entities: len(snap.All()), Repo: snap.Repo}, nil
 }
+
+// Graph is the whole persisted graph — every entity and every edge — the
+// data internal/httpserver's web UI (Phase 6) renders. Not something the
+// CLI needed before now: `ctx related`/`ctx inspect` only ever needed one
+// entity's neighborhood, never the entire graph at once.
+type Graph struct {
+	Entities []model.Entity
+	Edges    []model.Edge
+}
+
+// Graph returns every entity and edge in the persisted snapshot for root/
+// repo. Edges are derived by taking each entity's FanOut once — since
+// every model.Edge has exactly one Src, concatenating FanOut across every
+// entity yields the complete edge set with no duplication, without
+// internal/store needing a dedicated "all edges" accessor of its own.
+func (s *Service) Graph(root, repo string) (Graph, error) {
+	snap, err := s.open(root, repo)
+	if err != nil {
+		return Graph{}, err
+	}
+	entities := snap.All()
+	var edges []model.Edge
+	for _, e := range entities {
+		edges = append(edges, snap.FanOut(e.ID)...)
+	}
+	return Graph{Entities: entities, Edges: edges}, nil
+}
