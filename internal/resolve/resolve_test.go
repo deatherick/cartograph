@@ -2,11 +2,13 @@ package resolve
 
 import (
 	"testing"
+	"time"
 
 	"github.com/deatherick/cartograph/internal/model"
 )
 
-func entity(repo string, kind model.Kind, qualified, name string) model.Entity {
+func entity(kind model.Kind, qualified, name string) model.Entity {
+	const repo = "repo"
 	return model.Entity{
 		ID:        model.NewEntityID(repo, kind, qualified, ""),
 		Kind:      kind,
@@ -18,7 +20,7 @@ func entity(repo string, kind model.Kind, qualified, name string) model.Entity {
 
 func TestResolve_SameFile(t *testing.T) {
 	idx := NewIndex("repo")
-	fn := entity("repo", model.KindFunction, "a.ts#helper", "helper")
+	fn := entity(model.KindFunction, "a.ts#helper", "helper")
 	facts := &model.FileFacts{
 		File:     "a.ts",
 		Entities: []model.Entity{fn},
@@ -46,7 +48,7 @@ func TestResolve_SameFile(t *testing.T) {
 func TestResolve_ImportTable(t *testing.T) {
 	idx := NewIndex("repo")
 
-	repoEntity := entity("repo", model.KindClass, "repositories/userRepository.ts#UserRepository", "UserRepository")
+	repoEntity := entity(model.KindClass, "repositories/userRepository.ts#UserRepository", "UserRepository")
 	repoFacts := &model.FileFacts{File: "repositories/userRepository.ts", Entities: []model.Entity{repoEntity}}
 
 	svcFacts := &model.FileFacts{
@@ -132,7 +134,7 @@ func TestResolve_KnownGlobal_IsNotABug(t *testing.T) {
 
 func TestResolve_GenericBareNameWithCandidates_IsAmbiguousNotAutoResolved(t *testing.T) {
 	idx := NewIndex("repo")
-	getterA := entity("repo", model.KindFunction, "a.ts#get", "get")
+	getterA := entity(model.KindFunction, "a.ts#get", "get")
 	facts := &model.FileFacts{
 		File:     "b.ts",
 		Refs: []model.Ref{
@@ -174,5 +176,255 @@ func TestResolve_QualifiedThroughLocalVar_IsUnimplementedNotABug(t *testing.T) {
 	}
 	if got[0].Disposition.IsBug() {
 		t.Fatal("a documented scope gap must not count toward bug_rate")
+	}
+}
+
+func TestResolve_ReceiverType_SameFile(t *testing.T) {
+	idx := NewIndex("repo")
+	svc := entity(model.KindClass, "svc.ts#UserService", "UserService")
+	method := entity(model.KindMethod, "svc.ts#UserService.register", "register")
+	caller := entity(model.KindMethod, "svc.ts#Caller.run", "run")
+
+	facts := &model.FileFacts{
+		File:     "svc.ts",
+		Entities: []model.Entity{svc, method, caller},
+		Refs: []model.Ref{
+			{
+				Kind: model.RefCall, Src: caller.ID,
+				Target: model.RefTarget{Scope: model.ScopeQualified, Name: "userService", Member: "register", ReceiverType: "UserService"},
+			},
+		},
+	}
+	idx.AddFile(facts)
+	got := idx.Resolve([]*model.FileFacts{facts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected receiver-type resolution to Resolved, got %+v", got)
+	}
+	if got[0].Edge.Dst != method.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, method.ID)
+	}
+	if got[0].Edge.Src != caller.ID {
+		t.Fatalf("expected edge Src to be the calling entity, got %s", got[0].Edge.Src)
+	}
+	if got[0].Edge.Provenance != model.ProvenanceInferred {
+		t.Fatalf("expected receiver-type edges to be Inferred provenance, got %s", got[0].Edge.Provenance)
+	}
+}
+
+func TestResolve_ReceiverType_CrossFileViaImport(t *testing.T) {
+	idx := NewIndex("repo")
+	repoClass := entity(model.KindClass, "repositories/userRepository.ts#UserRepository", "UserRepository")
+	repoMethod := entity(model.KindMethod, "repositories/userRepository.ts#UserRepository.findByEmail", "findByEmail")
+	repoFacts := &model.FileFacts{File: "repositories/userRepository.ts", Entities: []model.Entity{repoClass, repoMethod}}
+
+	svcFacts := &model.FileFacts{
+		File: "services/userService.ts",
+		Imports: []model.ImportBinding{
+			{LocalName: "UserRepository", Source: "../repositories/userRepository", ImportedName: "UserRepository"},
+		},
+		Refs: []model.Ref{
+			{
+				Kind:   model.RefCall,
+				Target: model.RefTarget{Scope: model.ScopeQualified, Name: "repo", Member: "findByEmail", ReceiverType: "UserRepository"},
+			},
+		},
+	}
+	idx.AddFile(repoFacts)
+	idx.AddFile(svcFacts)
+
+	got := idx.Resolve([]*model.FileFacts{repoFacts, svcFacts})
+	var resolved *model.ResolvedRef
+	for i := range got {
+		if got[i].Disposition == model.DispositionResolved {
+			resolved = &got[i]
+		}
+	}
+	if resolved == nil {
+		t.Fatalf("expected a receiver-type ref to resolve cross-file, got: %+v", got)
+	}
+	if resolved.Edge.Dst != repoMethod.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", resolved.Edge.Dst, repoMethod.ID)
+	}
+}
+
+func TestResolve_ReceiverType_ImportedNameUsedAsStaticReceiver(t *testing.T) {
+	// `User.findById(...)` — User is a plain (non-namespace) import used
+	// directly as the call receiver, the dominant pattern in the real
+	// repo this was validated against (Mongoose model static-style calls).
+	idx := NewIndex("repo")
+	userModel := entity(model.KindClass, "models/user.ts#User", "User")
+	userFacts := &model.FileFacts{File: "models/user.ts", Entities: []model.Entity{userModel}}
+
+	routeFacts := &model.FileFacts{
+		File:    "routes/users.ts",
+		Imports: []model.ImportBinding{{LocalName: "User", Source: "../models/user", ImportedName: "User"}},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "User", Member: "findById"}},
+		},
+	}
+	idx.AddFile(userFacts)
+	idx.AddFile(routeFacts)
+
+	got := idx.Resolve([]*model.FileFacts{userFacts, routeFacts})
+	if len(got) != 1 {
+		t.Fatalf("expected 1 resolved ref, got %d", len(got))
+	}
+	// findById is not defined on User in this fixture (it would come from
+	// an unindexed base class in real Mongoose code) — must be
+	// ExternalUnknown, specifically NOT Unimplemented, since the resolver
+	// DID determine the receiver type and made a real decision.
+	if got[0].Disposition != model.DispositionExternalUnknown {
+		t.Fatalf("expected ExternalUnknown for a known type with an unindexed member, got %+v", got[0])
+	}
+}
+
+func TestResolve_ReceiverType_UnknownType_StaysUnimplemented(t *testing.T) {
+	idx := NewIndex("repo")
+	facts := &model.FileFacts{
+		File: "svc.ts",
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "thing", Member: "doStuff"}},
+		},
+	}
+	idx.AddFile(facts)
+	got := idx.Resolve([]*model.FileFacts{facts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionUnimplemented {
+		t.Fatalf("expected DispositionUnimplemented when the receiver type is genuinely unknown, got %+v", got)
+	}
+	if got[0].Disposition.IsBug() {
+		t.Fatal("a genuinely unknown receiver type must not count toward bug_rate")
+	}
+}
+
+func TestResolve_TSConfigPathAlias(t *testing.T) {
+	idx := NewIndex("repo")
+	idx.SetTSConfig(TSConfig{BaseURL: ".", Paths: map[string][]string{"@/*": {"src/*"}}})
+
+	svc := entity(model.KindClass, "src/services/userService.ts#UserService", "UserService")
+	svcFacts := &model.FileFacts{File: "src/services/userService.ts", Entities: []model.Entity{svc}}
+
+	callerFacts := &model.FileFacts{
+		File:    "src/app.ts",
+		Imports: []model.ImportBinding{{LocalName: "UserService", Source: "@/services/userService", ImportedName: "UserService"}},
+		Refs: []model.Ref{
+			{Kind: model.RefTypeUse, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "UserService"}},
+		},
+	}
+	idx.AddFile(svcFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{svcFacts, callerFacts})
+	var resolved *model.ResolvedRef
+	for i := range got {
+		if got[i].Disposition == model.DispositionResolved {
+			resolved = &got[i]
+		}
+	}
+	if resolved == nil {
+		t.Fatalf("expected the @/ alias import to resolve, got: %+v", got)
+	}
+	if resolved.Edge.Dst != svc.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", resolved.Edge.Dst, svc.ID)
+	}
+}
+
+func TestResolve_BarrelReExport_Star(t *testing.T) {
+	idx := NewIndex("repo")
+	userModel := entity(model.KindClass, "models/user.ts#User", "User")
+	userFacts := &model.FileFacts{File: "models/user.ts", Entities: []model.Entity{userModel}}
+
+	barrelFacts := &model.FileFacts{
+		File:      "models/index.ts",
+		ReExports: []model.ReExport{{Source: "./user", IsStar: true}},
+	}
+
+	callerFacts := &model.FileFacts{
+		File:    "app.ts",
+		Imports: []model.ImportBinding{{LocalName: "User", Source: "./models", ImportedName: "User"}},
+		Refs: []model.Ref{
+			{Kind: model.RefTypeUse, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "User"}},
+		},
+	}
+	idx.AddFile(userFacts)
+	idx.AddFile(barrelFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{userFacts, barrelFacts, callerFacts})
+	var resolved *model.ResolvedRef
+	for i := range got {
+		if got[i].Disposition == model.DispositionResolved {
+			resolved = &got[i]
+		}
+	}
+	if resolved == nil {
+		t.Fatalf("expected the import to resolve through the barrel's star re-export, got: %+v", got)
+	}
+	if resolved.Edge.Dst != userModel.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", resolved.Edge.Dst, userModel.ID)
+	}
+}
+
+func TestResolve_BarrelReExport_NamedWithAlias(t *testing.T) {
+	idx := NewIndex("repo")
+	orderModel := entity(model.KindClass, "models/order.ts#Order", "Order")
+	orderFacts := &model.FileFacts{File: "models/order.ts", Entities: []model.Entity{orderModel}}
+
+	barrelFacts := &model.FileFacts{
+		File:      "models/index.ts",
+		ReExports: []model.ReExport{{Source: "./order", ExportedName: "Order", LocalAlias: "OrderModel"}},
+	}
+
+	callerFacts := &model.FileFacts{
+		File:    "app.ts",
+		Imports: []model.ImportBinding{{LocalName: "OrderModel", Source: "./models", ImportedName: "OrderModel"}},
+		Refs: []model.Ref{
+			{Kind: model.RefTypeUse, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "OrderModel"}},
+		},
+	}
+	idx.AddFile(orderFacts)
+	idx.AddFile(barrelFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{orderFacts, barrelFacts, callerFacts})
+	var resolved *model.ResolvedRef
+	for i := range got {
+		if got[i].Disposition == model.DispositionResolved {
+			resolved = &got[i]
+		}
+	}
+	if resolved == nil {
+		t.Fatalf("expected the import to resolve through the barrel's aliased named re-export, got: %+v", got)
+	}
+	if resolved.Edge.Dst != orderModel.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", resolved.Edge.Dst, orderModel.ID)
+	}
+}
+
+func TestResolve_BarrelReExport_CycleIsSafe(t *testing.T) {
+	idx := NewIndex("repo")
+	// a.ts re-exports everything from b.ts, and b.ts re-exports everything
+	// from a.ts — a cycle that must not hang or stack-overflow.
+	aFacts := &model.FileFacts{File: "a.ts", ReExports: []model.ReExport{{Source: "./b", IsStar: true}}}
+	bFacts := &model.FileFacts{File: "b.ts", ReExports: []model.ReExport{{Source: "./a", IsStar: true}}}
+	callerFacts := &model.FileFacts{
+		File:    "app.ts",
+		Imports: []model.ImportBinding{{LocalName: "Missing", Source: "./a", ImportedName: "Missing"}},
+		Refs: []model.Ref{
+			{Kind: model.RefTypeUse, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "Missing"}},
+		},
+	}
+	idx.AddFile(aFacts)
+	idx.AddFile(bFacts)
+	idx.AddFile(callerFacts)
+
+	done := make(chan []model.ResolvedRef, 1)
+	go func() { done <- idx.Resolve([]*model.FileFacts{aFacts, bFacts, callerFacts}) }()
+	select {
+	case got := <-done:
+		if len(got) != 1 || got[0].Disposition != model.DispositionBugResolver {
+			t.Fatalf("expected a clean BugResolver disposition for a re-export cycle with no real entity, got %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Resolve did not return within 2s — likely an infinite loop in barrel re-export following")
 	}
 }

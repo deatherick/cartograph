@@ -112,6 +112,9 @@ func Run(ctx context.Context, root, repo string) (*Result, error) {
 	}
 
 	resolverIdx := resolve.NewIndex(repo)
+	if cfg, ok := loadTSConfig(root); ok {
+		resolverIdx.SetTSConfig(cfg)
+	}
 	for _, f := range allFacts {
 		resolverIdx.AddFile(f)
 	}

@@ -240,6 +240,16 @@ type RefTarget struct {
 	Module string // resolved import source, set only when Scope == ScopeQualified
 	Name   string // the bare name being referenced
 	Member string // e.g. "Name.Member" for a qualified property/method access
+	// ReceiverType is the statically-declared type of Name, when the
+	// extractor could determine it from a type annotation — a constructor
+	// parameter property (`private repo: UserRepository`), a typed class
+	// field, or a locally typed variable (`const x: Foo = ...` / `const x
+	// = new Foo()`). Empty when unknown. This is what makes the
+	// receiver-type resolver tier possible (docs/research/03,
+	// adapted from ADR-0012's Go/Java stdlib-interface-dispatch concept
+	// for TypeScript's own type-annotation idioms) — see
+	// internal/resolve's resolveByReceiverType.
+	ReceiverType string
 }
 
 // Ref is a reference an extractor observed but did not resolve — the
@@ -266,6 +276,18 @@ type ImportBinding struct {
 	IsDefault    bool   // `import X from "..."`
 }
 
+// ReExport is a barrel re-export: `export * from './x'` (IsStar) or
+// `export { a as b } from './x'` (named). Distinct from ImportBinding
+// because it flows in the resolver's IMPORT-FOLLOWING direction, not the
+// importing file's own binding table — see docs/research/03-import-resolution-and-bare-names.md's
+// ADR-0013 discussion and internal/resolve's followReExports.
+type ReExport struct {
+	Source       string // e.g. "./userModel" — unresolved to a file yet
+	IsStar       bool   // `export * from` — re-exports everything
+	ExportedName string // for the named form: the name being re-exported; empty for IsStar
+	LocalAlias   string // the name it's re-exported as; equals ExportedName when there is no `as`
+}
+
 // FileFacts is everything an extractor produces for one file: entities plus
 // unresolved refs and the import table, before any cross-file resolution
 // has happened.
@@ -275,6 +297,7 @@ type FileFacts struct {
 	Entities   []Entity
 	Refs       []Ref
 	Imports    []ImportBinding
+	ReExports  []ReExport
 	ErrorRatio float64 // from the parser's syntax-error gate
 }
 

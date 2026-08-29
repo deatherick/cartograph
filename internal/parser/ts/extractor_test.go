@@ -3,6 +3,8 @@ package ts
 import (
 	"context"
 	"testing"
+
+	"github.com/deatherick/cartograph/internal/model"
 )
 
 const sample = `
@@ -183,5 +185,241 @@ func TestExtract_MongooseSchemaMethodAssignment(t *testing.T) {
 	}
 	if !foundAttributedCall {
 		t.Errorf("expected the jwt.sign call inside generateJWT to have a non-empty Src, refs: %+v", facts.Refs)
+	}
+}
+
+func TestExtract_ReceiverType_ConstructorProperty(t *testing.T) {
+	src := `
+export class UserService {
+  constructor(private repo: UserRepository, private emailService: EmailService) {}
+
+  register(input: string): void {
+    this.repo.findByEmail(input);
+  }
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "svc.ts", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	found := false
+	for _, r := range facts.Refs {
+		if r.Target.Name == "repo" && r.Target.Member == "findByEmail" {
+			found = true
+			if r.Target.ReceiverType != "UserRepository" {
+				t.Errorf("expected ReceiverType=UserRepository, got %q", r.Target.ReceiverType)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a call ref to repo.findByEmail, got: %+v", facts.Refs)
+	}
+}
+
+func TestExtract_ReceiverType_TypedField(t *testing.T) {
+	src := `
+export class OrderService {
+  private orders: OrderRepository;
+
+  place(): void {
+    this.orders.insert(null);
+  }
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "svc.ts", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	found := false
+	for _, r := range facts.Refs {
+		if r.Target.Name == "orders" && r.Target.Member == "insert" {
+			found = true
+			if r.Target.ReceiverType != "OrderRepository" {
+				t.Errorf("expected ReceiverType=OrderRepository, got %q", r.Target.ReceiverType)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a call ref to orders.insert, got: %+v", facts.Refs)
+	}
+}
+
+func TestExtract_ReceiverType_TypedVariable(t *testing.T) {
+	src := `
+function run(): void {
+  const svc: UserService = getService();
+  svc.register("x");
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "svc.ts", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	found := false
+	for _, r := range facts.Refs {
+		if r.Target.Name == "svc" && r.Target.Member == "register" {
+			found = true
+			if r.Target.ReceiverType != "UserService" {
+				t.Errorf("expected ReceiverType=UserService, got %q", r.Target.ReceiverType)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a call ref to svc.register, got: %+v", facts.Refs)
+	}
+}
+
+func TestExtract_ReceiverType_NewInitializedVariable(t *testing.T) {
+	src := `
+function run(): void {
+  const svc = new UserService();
+  svc.register("x");
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "svc.ts", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	found := false
+	for _, r := range facts.Refs {
+		if r.Target.Name == "svc" && r.Target.Member == "register" {
+			found = true
+			if r.Target.ReceiverType != "UserService" {
+				t.Errorf("expected ReceiverType=UserService, got %q", r.Target.ReceiverType)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a call ref to svc.register, got: %+v", facts.Refs)
+	}
+}
+
+func TestExtract_ReceiverType_AmbiguousVariableName_NotInferred(t *testing.T) {
+	// `x` is typed differently in two different functions in the same
+	// file — fileVarTypes must NOT collapse this to either type; the
+	// resolver must not guess (docs/research/03's whitelist-not-guess
+	// principle).
+	src := `
+function a(): void {
+  const x: Foo = getFoo();
+  x.method();
+}
+function b(): void {
+  const x: Bar = getBar();
+  x.method();
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "svc.ts", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	for _, r := range facts.Refs {
+		if r.Target.Name == "x" && r.Target.Member == "method" && r.Target.ReceiverType != "" {
+			t.Errorf("expected ReceiverType to stay empty for an ambiguously-typed variable name, got %q", r.Target.ReceiverType)
+		}
+	}
+}
+
+func TestExtract_CJSRequire_Default(t *testing.T) {
+	src := `const UserRepository = require('./userRepository');`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "a.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, im := range facts.Imports {
+		if im.LocalName == "UserRepository" && im.Source == "./userRepository" && im.IsDefault {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a CJS default require binding, got %+v", facts.Imports)
+	}
+}
+
+func TestExtract_CJSRequire_Destructured(t *testing.T) {
+	src := `const { authentication, other } = require('./auth');`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "a.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, im := range facts.Imports {
+		if im.Source == "./auth" {
+			names[im.LocalName] = true
+		}
+	}
+	if !names["authentication"] || !names["other"] {
+		t.Fatalf("expected both destructured require bindings, got %+v", facts.Imports)
+	}
+}
+
+func TestExtract_ReExport_Star(t *testing.T) {
+	src := `export * from './userModel';`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "a.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.ReExports) != 1 || !facts.ReExports[0].IsStar || facts.ReExports[0].Source != "./userModel" {
+		t.Fatalf("expected one star re-export from ./userModel, got %+v", facts.ReExports)
+	}
+}
+
+func TestExtract_ReExport_Named(t *testing.T) {
+	src := `export { User, Order as OrderModel } from './models';`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "a.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.ReExports) != 2 {
+		t.Fatalf("expected 2 named re-exports, got %+v", facts.ReExports)
+	}
+	byName := map[string]model.ReExport{}
+	for _, r := range facts.ReExports {
+		byName[r.ExportedName] = r
+	}
+	if byName["User"].LocalAlias != "User" || byName["User"].IsStar {
+		t.Errorf("expected User re-exported as-is, got %+v", byName["User"])
+	}
+	if byName["Order"].LocalAlias != "OrderModel" {
+		t.Errorf("expected Order re-exported as OrderModel, got %+v", byName["Order"])
+	}
+}
+
+func TestExtract_TestDetection(t *testing.T) {
+	src := `
+describe("UserService", () => {
+  it("registers a user", () => {
+    expect(true).toBe(true);
+  });
+  test("rejects invalid email", () => {
+    expect(false).toBe(false);
+  });
+});
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "a.test.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, ent := range facts.Entities {
+		if ent.Kind == model.KindTest {
+			names[ent.Name] = true
+		}
+	}
+	for _, want := range []string{"UserService", "registers a user", "rejects invalid email"} {
+		if !names[want] {
+			t.Errorf("expected a Test entity named %q, found: %v", want, names)
+		}
 	}
 }

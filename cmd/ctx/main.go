@@ -33,8 +33,12 @@ func main() {
 		err = runIndex(svc, os.Args[2:])
 	case "find":
 		err = runFind(svc, os.Args[2:])
+	case "inspect":
+		err = runInspect(svc, os.Args[2:])
 	case "related":
 		err = runRelated(svc, os.Args[2:])
+	case "source":
+		err = runSource(svc, os.Args[2:])
 	case "stats":
 		err = runStats(svc, os.Args[2:])
 	default:
@@ -53,7 +57,9 @@ func usage() {
 Usage:
   ctx index <path>              index a repo, persist a snapshot, print run stats
   ctx find <path> <name>        find every entity with this bare name (reads snapshot)
+  ctx inspect <path> <name>     full detail on one entity: signature, fan-in, fan-out
   ctx related <path> <name> [--depth N]   entities within N hops (reads snapshot)
+  ctx source <path> <name>      print the entity's source lines
   ctx stats <path>              print snapshot summary (reads snapshot)
 
 find/related/stats read the snapshot persisted by the last `+"`ctx index`"+` run — they
@@ -68,6 +74,18 @@ func repoName(root string) string {
 		return filepath.Base(root)
 	}
 	return filepath.Base(strings.TrimRight(abs, string(filepath.Separator)))
+}
+
+// flagValue returns the value following flag in args, or "" if flag is
+// absent — a small shared helper so --file (and, later, other optional
+// flags) don't need bespoke parsing in every subcommand.
+func flagValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 func runIndex(svc *service.Service, args []string) error {
@@ -104,9 +122,49 @@ func runFind(svc *service.Service, args []string) error {
 	return nil
 }
 
+func runInspect(svc *service.Service, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: ctx inspect <path> <name> [--file <substring>]")
+	}
+	root, name := args[0], args[1]
+	insp, err := svc.Inspect(root, repoName(root), name, flagValue(args, "--file"))
+	if err != nil {
+		return err
+	}
+	e := insp.Entity
+	fmt.Printf("%s %s\n", e.Kind, e.Qualified)
+	if e.Signature != "" {
+		fmt.Printf("  signature: %s\n", e.Signature)
+	}
+	fmt.Printf("  location:  %s:%d-%d\n", e.Anchor.File, e.Anchor.StartLine, e.Anchor.EndLine)
+	fmt.Printf("  fan-out (%d) — what it calls/extends/implements/uses:\n", len(insp.FanOut))
+	for _, edge := range insp.FanOut {
+		fmt.Printf("    -> %s %s (%s, conf=%.2f)\n", edge.Kind, edge.Dst, edge.Provenance, edge.Confidence)
+	}
+	fmt.Printf("  fan-in (%d) — who calls/extends/implements/uses it:\n", len(insp.FanIn))
+	for _, edge := range insp.FanIn {
+		fmt.Printf("    <- %s %s (%s, conf=%.2f)\n", edge.Kind, edge.Src, edge.Provenance, edge.Confidence)
+	}
+	return nil
+}
+
+func runSource(svc *service.Service, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: ctx source <path> <name> [--file <substring>]")
+	}
+	root, name := args[0], args[1]
+	src, e, err := svc.Source(root, repoName(root), name, flagValue(args, "--file"))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("# %s %s (%s:%d-%d)\n", e.Kind, e.Qualified, e.Anchor.File, e.Anchor.StartLine, e.Anchor.EndLine)
+	fmt.Print(src)
+	return nil
+}
+
 func runRelated(svc *service.Service, args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: ctx related <path> <name> [--depth N]")
+		return fmt.Errorf("usage: ctx related <path> <name> [--depth N] [--file <substring>]")
 	}
 	root, name := args[0], args[1]
 	depth := 2
@@ -117,7 +175,7 @@ func runRelated(svc *service.Service, args []string) error {
 			}
 		}
 	}
-	related, err := svc.Related(root, repoName(root), name, depth)
+	related, err := svc.Related(root, repoName(root), name, flagValue(args, "--file"), depth)
 	if err != nil {
 		return err
 	}

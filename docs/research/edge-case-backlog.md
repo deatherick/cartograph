@@ -37,7 +37,7 @@ reference is their issue number, kept as traceability for where the case came fr
 | B10 | Qualified call vs. bare name with the same name in the same file | #4554 | 1 |
 | B11 | Filtering by the leaf name's kind: `Foo.bar` must not link to a `bar` of an incompatible kind | #6141 | 1 |
 | B12 | Dynamic import / `require()` with a constructed string → `dynamic` disposition, not a bug | ADR-0011 | 1 |
-| B13 | **Receiver-type inference** (`obj.method()` where `obj` is a local variable or constructor-injected property, not an import) — biggest open gap after the Phase 1 vertical slice: 181 of ~236 refs in a real-repo validation run are `DispositionUnimplemented` for exactly this reason | ADR-0012, ADR-0004 | 1 (open) |
+| B13 | **Receiver-type inference** (`obj.method()` where `obj` is a local variable, constructor-injected property, or an imported class used as a static receiver) — closed: constructor-parameter-properties, typed fields, typed/`new`-initialized variables (single-type-per-name-per-file), and imported-name-as-static-receiver are all resolved. Unresolvable receivers stay `DispositionUnimplemented`; known-type-unknown-member stays `DispositionExternalUnknown` | ADR-0012, ADR-0004, ADR-0006 | 1 (closed) |
 
 ## C. TypeScript / JavaScript (Phase 1)
 

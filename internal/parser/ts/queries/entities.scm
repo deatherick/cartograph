@@ -131,3 +131,83 @@
     (namespace_import
       (identifier) @import.namespace))
   source: (string (string_fragment) @import.source)) @import.stmt
+
+; --- Receiver-type signals (closes the largest Phase 1 resolver gap: see
+; docs/research/edge-case-backlog.md B13, ADR-0004/ADR-0006) ---
+;
+; These do not produce entities or refs by themselves — the extractor uses
+; them to build a "what type is this name?" map, then attaches
+; RefTarget.ReceiverType to qualified-call refs so the resolver's
+; receiver-type tier can bind `this.repo.findByEmail()` /
+; `service.method()` the same way ADR-0012 describes for statically-typed
+; languages, adapted here to TypeScript's own type-annotation idioms
+; rather than Go/Java stdlib-interface dispatch.
+
+; Constructor parameter property: `constructor(private repo: UserRepository) {}`
+; — TypeScript sugar declaring BOTH a constructor parameter and a class
+; field of the same name/type in one place. The dominant way real code
+; declares constructor-injected dependencies (confirmed against both this
+; project's own fixtures and the real-repo validation clone).
+(required_parameter
+  (accessibility_modifier)
+  pattern: (identifier) @receiver.propname
+  type: (type_annotation (type_identifier) @receiver.proptype)) @receiver.ctorprop
+
+; Typed class field declared directly in the class body (no constructor
+; sugar): `private repo: UserRepository;`
+(public_field_definition
+  name: (property_identifier) @receiver.propname
+  type: (type_annotation (type_identifier) @receiver.proptype)) @receiver.fieldprop
+
+; Locally typed variable: `const x: Foo = ...`
+(variable_declarator
+  name: (identifier) @receiver.varname
+  type: (type_annotation (type_identifier) @receiver.vartype)) @receiver.typedvar
+
+; Variable initialized via `new`: `const x = new Foo(...)` — the type is
+; the constructor name, no explicit annotation needed.
+(variable_declarator
+  name: (identifier) @receiver.varname
+  value: (new_expression constructor: (identifier) @receiver.vartype)) @receiver.newvar
+
+; --- CommonJS require() imports ---
+; `const x = require('./m');`
+(variable_declarator
+  name: (identifier) @import.cjs.default
+  value: (call_expression
+    function: (identifier) @import.cjs.require
+    arguments: (arguments (string (string_fragment) @import.cjs.source)))) @import.cjs.stmt
+
+; `const { a, b } = require('./m');`
+(variable_declarator
+  name: (object_pattern
+    (shorthand_property_identifier_pattern) @import.cjs.named)
+  value: (call_expression
+    function: (identifier) @import.cjs.require2
+    arguments: (arguments (string (string_fragment) @import.cjs.source)))) @import.cjs.stmt2
+
+; --- Re-exports (barrel files): `export * from './x'` and
+; `export { a, b as c } from './x'`. Both share export_statement's
+; `source` field; disambiguated in Go by whether an export_clause (named
+; specifiers) is present among the match's captures — see
+; docs/research/03-import-resolution-and-bare-names.md's ADR-0013
+; discussion of re-exports as the highest-signal scoping data available.
+(export_statement
+  source: (string (string_fragment) @reexport.source)) @reexport.stmt
+
+(export_statement
+  (export_clause
+    (export_specifier
+      name: (identifier) @reexport.named
+      alias: (identifier)? @reexport.alias))
+  source: (string (string_fragment) @reexport.source)) @reexport.namedstmt
+
+; --- Test detection: `it('...', ...)` / `test('...', ...)` /
+; `describe('...', ...)` with a string-literal first argument. The
+; dominant Jest/Mocha convention; framework-specific patterns beyond this
+; (custom test runners) are Phase 7 scope (docs/research/09's "framework
+; catalog" deferral), not Phase 1.
+(call_expression
+  function: (identifier) @test.fn
+  arguments: (arguments
+    . (string (string_fragment) @test.name))) @test.call

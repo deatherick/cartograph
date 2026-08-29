@@ -35,6 +35,14 @@ var knownGlobals = map[string]bool{
 	"decodeURIComponent": true, "WeakMap": true, "WeakSet": true, "Proxy": true,
 	"Reflect": true, "structuredClone": true, "fetch": true, "URL": true,
 	"crypto": true,
+	// Jest/Mocha test-framework globals — otherwise every `describe`/`it`/
+	// `expect` call in a test file (which queries/entities.scm's
+	// test.call pattern also emits a bare-call Ref for, alongside the
+	// KindTest entity itself) would count as a bug-worthy unresolved
+	// reference. Found while adding test detection.
+	"describe": true, "it": true, "test": true, "expect": true,
+	"beforeEach": true, "afterEach": true, "beforeAll": true, "afterAll": true,
+	"jest": true,
 }
 
 // knownPackages is a starter allowlist of well-known npm packages, mirrored
