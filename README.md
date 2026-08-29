@@ -30,8 +30,9 @@ cd cartograph
 make build
 ```
 
-This produces four binaries in `bin/`: `ctx` (CLI), `ctxmcp` (MCP server), `ctxd` (daemon —
-placeholder, not implemented yet), `ctxbench` (the benchmark harness the project's own token-
+This produces four binaries in `bin/`: `ctx` (CLI), `ctxmcp` (MCP server), `ctxd` (daemon — indexes
+once then watches and re-indexes on change; see [Keeping the index fresh](#keeping-the-index-fresh-ctxd)
+below), `ctxbench` (the benchmark harness the project's own token-
 savings claims are measured against).
 
 ## Quickstart (2 minutes, no setup)
@@ -111,6 +112,23 @@ If two entities share a bare name (common — a class and a same-named test bloc
 in different files), every lookup command accepts `--file <substring>` to disambiguate:
 `./bin/ctx inspect <path> UserService --file services`.
 
+### Keeping the index fresh: `ctxd`
+
+`ctx index` is a one-shot snapshot — edit the source afterward and every read command silently
+serves the old one until you re-index by hand. `ctxd` does that automatically:
+
+```bash
+./bin/ctxd ~/path/to/some/project   # indexes once, then watches and re-indexes on every change
+```
+
+Runs in the foreground until `Ctrl+C`. This is a V0: it re-indexes the **whole** project on every
+change (not yet a true per-file incremental update — see
+[ADR-0012](docs/adr/0012-daemon-watcher-and-global-install-requirements.md) for why that's a
+deliberate, measured scoping choice, not an oversight) and doesn't yet run as a background system
+service — see
+[`docs/requirements/phase9-global-install-and-daemon.md`](docs/requirements/phase9-global-install-and-daemon.md)
+for that design, captured but not built yet.
+
 ## Using it from a coding agent (MCP)
 
 ```bash
@@ -145,8 +163,10 @@ The honest list, kept current in [`docs/MVP.md`](docs/MVP.md#consolidated-known-
 - **Go's implicit interface satisfaction (no `implements` keyword) cannot be detected** — needs
   real type-checking, not tree-sitter queries; a permanent gap, not a missing feature
   ([ADR-0010](docs/adr/0010-go-extractor-and-self-hosting.md)).
-- **No staleness detection.** Editing source after `ctx index` silently serves the old snapshot
-  until you re-index — no watcher/daemon yet.
+- **No staleness detection with plain `ctx index`.** Editing source silently serves the old
+  snapshot until you re-index by hand, unless `ctxd` is running for that project (see
+  [Keeping the index fresh](#keeping-the-index-fresh-ctxd) above) — and even then, it's a full
+  reindex on change, not yet true per-file incremental.
 - **No fuzzy/full-text search.** `find`/`inspect`/`related`/`source` need an exact bare name or
   qualified name (`file#Name`). No SQLite/FTS5 yet — deliberately deferred, see
   [ADR-0006](docs/adr/0006-phase1-completion-and-search-scope.md).

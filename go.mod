@@ -3,6 +3,7 @@ module github.com/deatherick/cartograph
 go 1.27.0
 
 require (
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/tree-sitter/go-tree-sitter v0.25.0

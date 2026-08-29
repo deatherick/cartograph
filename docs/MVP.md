@@ -17,7 +17,7 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 3a — Go extractor + self-hosting | ✅ Done (ADR-0010) — 0.1% bug_rate indexing this project's own real Go source |
 | 3a′ — Plug-and-play language architecture, init wizard | ✅ Done (ADR-0011) — `LanguagePolicy` interface, `.cartograph.json`, `ctx init`/`ctx languages` |
 | 3b/3c — C#, Python extractors | ⬜ Post-MVP (now a drop-in addition per ADR-0011, not a core rewrite) |
-| 3d — Daemon, incremental indexing, file watcher | ⬜ Post-MVP |
+| 3d — Daemon watcher (V0: full reindex on change, not per-file incremental) | ✅ Done (ADR-0012) — `internal/watch` + real `cmd/ctxd`, verified end-to-end |
 | 4-9 — Impact analysis, duplicates, Web UI, cross-repo, AI, hardening | ⬜ Post-MVP |
 
 ## What "MVP" means for this project
@@ -151,11 +151,26 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
   constants.
 
 ### Persistence (`internal/store`, `internal/ledger`)
-- No staleness detection — if source changes after `ctx index` ran, every read command silently
-  serves the stale snapshot. No mtime/content-hash check exists yet (explicitly Phase 3: the
-  watcher, incremental indexing).
+- **Staleness detection exists only while `ctxd` is running for that project** (ADR-0012) — plain
+  `ctx index` (no daemon) still has no mtime/content-hash check; running the snapshot stale until
+  the next manual `ctx index` in that mode is unchanged from Phase 1.
 - Reader uses `os.ReadFile`, not a real `mmap` — a deliberate, documented scoping choice (ADR-0005)
   since no daemon exists yet to make mmap's advantage matter. Format is mmap-ready for later.
+
+### Daemon (`internal/watch`, `cmd/ctxd`) — ADR-0012
+- **Full reindex on every change, not true per-file incremental** — a deliberate V0 scoping
+  choice (measured: well under a second on this project's own 58-file source), not a small
+  optimization deferred casually. Real incremental indexing needs content-hash re-anchoring and
+  dependency tracking across the resolver's same-file/same-package/import tiers — genuinely
+  harder work, tracked via `docs/research/edge-case-backlog.md`'s `F1`-`F9` cases.
+- fsnotify's kqueue/inotify backend costs one descriptor per watched *directory* — fine at any
+  scale measured so far, but a real FSEvents binding (per
+  `docs/research/05-watcher-and-invalidation.md`'s recommendation) is still the right answer
+  before this runs against a repo with thousands of directories.
+- No exclusion churn quarantine, no `.git/HEAD` branch-change poller, no crash-reconcile-on-
+  restart, no multi-project registry (`ctxd project add/list`) — `ctxd` takes exactly one path
+  and runs in the foreground. All explicitly deferred, catalogued in
+  `docs/research/edge-case-backlog.md`'s `F`/`G` sections.
 - `internal/search`'s FTS5/fuzzy layer does not exist — exact and qualified-name lookup (a linear
   scan) cover today's real need; SQLite is deferred until a feature already needs it
   (ADR-0006).
@@ -185,7 +200,12 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
   as a cross-cutting primitive).
 - **Cross-repo linking, learned relationships, agent policy files** (Phase 7).
 - **Optional AI provider integration, Ask AI** (Phase 8).
-- **Hardening, installer, distribution** (Phase 9).
+- **Hardening, installer, distribution** (Phase 9) — global install (`ctx`/`ctxd` on `PATH`, no
+  clone/Go-toolchain required) and the daemon as a persistent system-level service (`launchd`/
+  `systemd --user`), with only `.cartograph.json` ever living inside a project directory.
+  Requirements captured in full at the user's explicit request:
+  [`docs/requirements/phase9-global-install-and-daemon.md`](docs/requirements/phase9-global-install-and-daemon.md).
+  Not started.
 
 ## Immediate next steps, in order
 
@@ -203,7 +223,14 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
    architecture test), `.cartograph.json` for opt-in/opt-out language selection, and `ctx
    init`/`ctx languages` as the wizard/status commands. Verified a disabled language is never
    even walked, not merely filtered from output.
-6. Next up, per the deferred list above: C#/Python extractors (Phase 3b/3c — now a drop-in
-   addition, not a core rewrite), then the daemon + incremental indexing + file watcher
-   (Phase 3d) — prioritized by real usage feedback, not by continuing to iterate on ranker
-   constants against one synthetic fixture.
+6. ~~Global-install requirements~~ — captured, not built, at the user's explicit request: see
+   `docs/requirements/phase9-global-install-and-daemon.md` and ADR-0012.
+7. ~~Daemon watcher (Phase 3d V0)~~ — done, ADR-0012: real `cmd/ctxd` indexes once then watches
+   and re-indexes automatically on change (full reindex, not yet per-file incremental — a
+   measured, documented scoping choice), verified end-to-end against a real fixture (entity count
+   moving 4→5 after a live content change with zero manual `ctx index` re-run).
+8. Next up, per the deferred list above: C#/Python extractors (Phase 3b/3c — now a drop-in
+   addition per ADR-0011, not a core rewrite), true per-file incremental indexing, or the
+   global-install/system-service work (Phase 9, requirements already captured) — prioritized by
+   real usage feedback, not by continuing to iterate on ranker constants against one synthetic
+   fixture.
