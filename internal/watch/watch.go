@@ -1,11 +1,11 @@
 // Package watch is Phase 3d's file-watching layer: notice when a
-// project's source changes and tell the caller "something changed, go
-// re-index" — debounced into one signal per burst of activity, never one
-// event per file. This package does not decide WHAT changed or re-index
-// anything itself; cmd/ctxd owns that decision (today: a full re-index on
-// every signal — see its own doc for why that is a deliberate, documented
-// V0 scoping choice, not the true per-file incremental indexing the
-// project plan's Phase 3 ultimately wants).
+// project's source changes and tell the caller WHICH files changed —
+// debounced into one batch per burst of activity, never one signal per
+// individual write. Since ADR-0020 (true per-file incremental indexing)
+// this package surfaces the actual changed paths, not just a bare
+// "something changed" pulse; cmd/ctxd (via internal/index.Indexer) still
+// owns every decision about what to DO with that list — extract, resolve,
+// invalidate — this package's only job is telling it what changed.
 //
 // Built on github.com/fsnotify/fsnotify (kqueue on macOS, inotify on
 // Linux) rather than the FSEvents-based, zero-descriptor-per-file backend
@@ -33,13 +33,13 @@ import (
 // burst of saves into one re-index, not one per keystroke-adjacent write.
 const DefaultDebounce = 300 * time.Millisecond
 
-// Watcher watches a directory tree and emits a debounced "something
-// changed" signal on Events(). Errors() surfaces non-fatal watch errors
-// (e.g. a directory removed out from under the watcher) for the caller to
-// log; neither channel is ever closed except by Close().
+// Watcher watches a directory tree and emits a debounced batch of changed
+// (absolute) file paths on Events(). Errors() surfaces non-fatal watch
+// errors (e.g. a directory removed out from under the watcher) for the
+// caller to log; neither channel is ever closed except by Close().
 type Watcher struct {
 	fsw      *fsnotify.Watcher
-	events   chan struct{}
+	events   chan []string
 	errs     chan error
 	debounce time.Duration
 	done     chan struct{}
@@ -60,7 +60,7 @@ func New(root string, debounce time.Duration) (*Watcher, error) {
 	}
 	w := &Watcher{
 		fsw:      fsw,
-		events:   make(chan struct{}, 1),
+		events:   make(chan []string, 1),
 		errs:     make(chan error, 1),
 		debounce: debounce,
 		done:     make(chan struct{}),
@@ -92,12 +92,16 @@ func (w *Watcher) addTree(root string) error {
 	})
 }
 
-// Events returns the debounced change-signal channel: a receive means the
-// tree changed and activity has settled for at least the debounce period.
-// Buffered size 1 and coalescing — a caller still mid-reindex when more
-// changes arrive does not miss them, but also never queues up a backlog
-// of redundant signals.
-func (w *Watcher) Events() <-chan struct{} { return w.events }
+// Events returns the debounced changed-paths channel: a receive means the
+// tree changed (paths lists every distinct file touched, in no particular
+// order) and activity has settled for at least the debounce period.
+// Buffered size 1 — a caller still mid-reindex when more changes arrive
+// does not miss them: instead of being dropped (the pre-ADR-0020 bare-
+// signal behavior, safe only because there was no data to lose), further
+// changes accumulate and MERGE into the next batch once the caller
+// receives, so no changed path is ever silently lost waiting for a slow
+// consumer.
+func (w *Watcher) Events() <-chan []string { return w.events }
 
 // Errors returns non-fatal watch errors as they occur.
 func (w *Watcher) Errors() <-chan error { return w.errs }
@@ -111,6 +115,8 @@ func (w *Watcher) Close() error {
 func (w *Watcher) loop() {
 	var timer *time.Timer
 	var timerC <-chan time.Time
+	pending := map[string]struct{}{}
+
 	for {
 		select {
 		case ev, ok := <-w.fsw.Events:
@@ -128,6 +134,8 @@ func (w *Watcher) loop() {
 					_ = w.addTree(ev.Name)
 				}
 			}
+			pending[ev.Name] = struct{}{}
+
 			if timer == nil {
 				timer = time.NewTimer(w.debounce)
 			} else {
@@ -142,11 +150,27 @@ func (w *Watcher) loop() {
 			timerC = timer.C
 
 		case <-timerC:
-			select {
-			case w.events <- struct{}{}:
-			default:
-			}
 			timerC = nil
+			if len(pending) == 0 {
+				continue
+			}
+			paths := make([]string, 0, len(pending))
+			for p := range pending {
+				paths = append(paths, p)
+			}
+			select {
+			case w.events <- paths:
+				pending = map[string]struct{}{}
+			default:
+				// The previous batch is still unconsumed — keep
+				// accumulating (pending is left as-is, so a future
+				// successful send carries everything merged; nothing
+				// changed is ever lost) and retry the send after another
+				// debounce period rather than waiting for a new fs event
+				// that may never come before the consumer catches up.
+				timer.Reset(w.debounce)
+				timerC = timer.C
+			}
 
 		case err, ok := <-w.fsw.Errors:
 			if !ok {

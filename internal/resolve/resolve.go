@@ -115,9 +115,15 @@ func (idx *Index) RegisterPolicy(p LanguagePolicy) {
 }
 
 // AddFile registers one file's extracted facts. Must be called for every
-// file before Resolve — the resolver has no notion of incremental
-// per-file resolution yet (that arrives with Phase 3's incremental index).
+// file before Resolve. Idempotent: re-adding a file already present (an
+// incremental update, ADR-0020) first removes its old registration
+// (RemoveFile) so byBareName/filesByDir never accumulate stale or
+// duplicate entries from a file's previous version — the caller does not
+// need to call RemoveFile itself first.
 func (idx *Index) AddFile(facts *model.FileFacts) {
+	if _, exists := idx.files[facts.File]; exists {
+		idx.RemoveFile(facts.File)
+	}
 	dir := path.Dir(facts.File)
 	fe := &fileEntry{
 		lang:           facts.Lang,
@@ -172,6 +178,139 @@ func (idx *Index) AddFile(facts *model.FileFacts) {
 		fe.methodsByOwner[owner][e.Name] = e.ID
 	}
 	idx.files[facts.File] = fe
+}
+
+// HasFile reports whether file is currently registered (via AddFile, and
+// not since removed by RemoveFile) — used by incremental indexing
+// (ADR-0020, internal/index.Indexer) to distinguish a brand-new file from
+// one merely being re-added with unchanged content.
+func (idx *Index) HasFile(file string) bool {
+	_, ok := idx.files[file]
+	return ok
+}
+
+// FileCount returns how many files are currently registered — the "Files"
+// figure incremental indexing (ADR-0020) reports without needing a
+// separate counter maintained alongside AddFile/RemoveFile.
+func (idx *Index) FileCount() int {
+	return len(idx.files)
+}
+
+// RemoveFile deletes file's registered facts — the counterpart to AddFile
+// that makes it safe to call AddFile again for the same file (an
+// incremental update, ADR-0020): every entity ID this file contributed is
+// pruned from the repo-wide byBareName index, and file is removed from
+// its directory's filesByDir list, before file itself is dropped from
+// idx.files. A no-op if file was never added.
+func (idx *Index) RemoveFile(file string) {
+	fe, ok := idx.files[file]
+	if !ok {
+		return
+	}
+	for _, e := range fe.entities {
+		if e.Kind == model.KindTest {
+			continue // never indexed into byBareName in the first place — see AddFile's doc
+		}
+		idx.byBareName[e.Name] = removeEntityID(idx.byBareName[e.Name], e.ID)
+		if len(idx.byBareName[e.Name]) == 0 {
+			delete(idx.byBareName, e.Name)
+		}
+	}
+	idx.filesByDir[fe.dir] = removeFilePath(idx.filesByDir[fe.dir], file)
+	if len(idx.filesByDir[fe.dir]) == 0 {
+		delete(idx.filesByDir, fe.dir)
+	}
+	delete(idx.files, file)
+}
+
+func removeEntityID(ids []model.EntityID, target model.EntityID) []model.EntityID {
+	kept := ids[:0]
+	for _, id := range ids {
+		if id != target {
+			kept = append(kept, id)
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
+func removeFilePath(files []string, target string) []string {
+	kept := files[:0]
+	for _, f := range files {
+		if f != target {
+			kept = append(kept, f)
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
+// Dependents returns every OTHER registered file whose resolution outcome
+// could change if file's exports or content change: files that import it
+// (directly, or via a barrel re-export chain) and — for a directory-
+// scoped language like Go, via LanguagePolicy.SameScopeFiles — package
+// siblings that share its unqualified-name scope. This is the "who else
+// needs re-resolving" reverse lookup incremental indexing (ADR-0020)
+// needs beyond the changed file itself.
+//
+// Implemented as a scan over every registered file's own (small) import
+// table, not a maintained reverse index — the resolver keeps no such
+// index today, and this scan is fast relative to the extraction/
+// resolution work incremental indexing exists to avoid repeating. A real
+// reverse-import index (O(1) instead of O(files)) is a legitimate future
+// optimization if profiling ever shows this scan itself is the
+// bottleneck — not attempted here without a measurement to justify it.
+func (idx *Index) Dependents(file string) []string {
+	seen := map[string]bool{file: true} // never report a file as its own dependent
+	var out []string
+	add := func(f string) {
+		if !seen[f] {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+
+	for other, fe := range idx.files {
+		if other == file {
+			continue
+		}
+		policy := idx.policyFor(fe)
+		if policy == nil {
+			continue
+		}
+		for _, im := range fe.imports {
+			if targets, ok := policy.ResolveImportTarget(idx, other, im.Source); ok {
+				for _, t := range targets {
+					if t == file {
+						add(other)
+					}
+				}
+			}
+		}
+		for _, re := range fe.reExports {
+			if targets, ok := policy.ResolveImportTarget(idx, other, re.Source); ok {
+				for _, t := range targets {
+					if t == file {
+						add(other)
+					}
+				}
+			}
+		}
+	}
+
+	if fe := idx.files[file]; fe != nil {
+		if policy := idx.policyFor(fe); policy != nil {
+			for _, sibling := range policy.SameScopeFiles(idx, file) {
+				add(sibling)
+			}
+		}
+	}
+
+	return out
 }
 
 // Resolve resolves every ref of every file added so far, returning one

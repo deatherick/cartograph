@@ -661,3 +661,138 @@ func TestResolve_UnregisteredLanguage_IsUnclassifiedNotGuessed(t *testing.T) {
 		t.Fatal("a deliberately disabled language must not count toward bug_rate")
 	}
 }
+
+// --- ADR-0020: incremental indexing support (RemoveFile, AddFile
+// idempotency, Dependents) ---
+
+func TestRemoveFile_PrunesByBareNameAndFilesByDir(t *testing.T) {
+	idx := tsIndex()
+	e := entity(model.KindFunction, "a.ts#helper", "helper")
+	facts := &model.FileFacts{Lang: model.LangTS, File: "a.ts", Entities: []model.Entity{e}}
+	idx.AddFile(facts)
+
+	if len(idx.byBareName["helper"]) != 1 {
+		t.Fatalf("expected helper indexed once before removal, got %v", idx.byBareName["helper"])
+	}
+	if len(idx.filesByDir["."]) != 1 {
+		t.Fatalf("expected a.ts registered under its directory, got %v", idx.filesByDir["."])
+	}
+
+	idx.RemoveFile("a.ts")
+
+	if len(idx.byBareName["helper"]) != 0 {
+		t.Errorf("expected helper pruned from byBareName after RemoveFile, got %v", idx.byBareName["helper"])
+	}
+	if _, ok := idx.files["a.ts"]; ok {
+		t.Error("expected a.ts removed from idx.files")
+	}
+	if len(idx.filesByDir["."]) != 0 {
+		t.Errorf("expected a.ts pruned from filesByDir, got %v", idx.filesByDir["."])
+	}
+}
+
+func TestRemoveFile_Unknown_IsNoop(t *testing.T) {
+	idx := tsIndex()
+	idx.RemoveFile("never-added.ts") // must not panic
+}
+
+func TestAddFile_ReAddingSameFile_DoesNotDuplicateOrLeaveStaleEntries(t *testing.T) {
+	// A function renamed from "oldName" to "newName" within the same
+	// file, re-extracted and re-added (the incremental update path) —
+	// byBareName must reflect ONLY the new state: no lingering "oldName"
+	// entry, and no duplicate entries from adding the same file twice.
+	idx := tsIndex()
+	before := entity(model.KindFunction, "a.ts#oldName", "oldName")
+	idx.AddFile(&model.FileFacts{Lang: model.LangTS, File: "a.ts", Entities: []model.Entity{before}})
+
+	after := entity(model.KindFunction, "a.ts#newName", "newName")
+	idx.AddFile(&model.FileFacts{Lang: model.LangTS, File: "a.ts", Entities: []model.Entity{after}})
+
+	if len(idx.byBareName["oldName"]) != 0 {
+		t.Errorf("expected oldName pruned after the file was re-added without it, got %v", idx.byBareName["oldName"])
+	}
+	if got := idx.byBareName["newName"]; len(got) != 1 || got[0] != after.ID {
+		t.Errorf("expected exactly one newName entry, got %v", got)
+	}
+	if len(idx.filesByDir["."]) != 1 {
+		t.Errorf("expected a.ts registered exactly once in filesByDir even after being re-added, got %v", idx.filesByDir["."])
+	}
+}
+
+func TestDependents_TS_FindsImporter(t *testing.T) {
+	idx := tsIndex()
+	repoFacts := &model.FileFacts{
+		Lang: model.LangTS, File: "repositories/userRepository.ts",
+		Entities: []model.Entity{entity(model.KindClass, "repositories/userRepository.ts#UserRepository", "UserRepository")},
+	}
+	svcFacts := &model.FileFacts{
+		Lang: model.LangTS, File: "services/userService.ts",
+		Imports: []model.ImportBinding{{LocalName: "UserRepository", Source: "../repositories/userRepository", ImportedName: "UserRepository"}},
+	}
+	unrelated := &model.FileFacts{Lang: model.LangTS, File: "unrelated.ts"}
+	idx.AddFile(repoFacts)
+	idx.AddFile(svcFacts)
+	idx.AddFile(unrelated)
+
+	deps := idx.Dependents("repositories/userRepository.ts")
+	if len(deps) != 1 || deps[0] != "services/userService.ts" {
+		t.Fatalf("expected Dependents to find exactly services/userService.ts, got %v", deps)
+	}
+}
+
+func TestDependents_TS_BarrelReExportCounts(t *testing.T) {
+	idx := tsIndex()
+	targetFacts := &model.FileFacts{
+		Lang: model.LangTS, File: "models/user.ts",
+		Entities: []model.Entity{entity(model.KindClass, "models/user.ts#User", "User")},
+	}
+	barrelFacts := &model.FileFacts{
+		Lang: model.LangTS, File: "models/index.ts",
+		ReExports: []model.ReExport{{Source: "./user", IsStar: true}},
+	}
+	idx.AddFile(targetFacts)
+	idx.AddFile(barrelFacts)
+
+	deps := idx.Dependents("models/user.ts")
+	if len(deps) != 1 || deps[0] != "models/index.ts" {
+		t.Fatalf("expected the barrel file that re-exports it, got %v", deps)
+	}
+}
+
+func TestDependents_TS_NoImporters_IsEmpty(t *testing.T) {
+	idx := tsIndex()
+	idx.AddFile(&model.FileFacts{Lang: model.LangTS, File: "a.ts"})
+	idx.AddFile(&model.FileFacts{Lang: model.LangTS, File: "b.ts"})
+	if deps := idx.Dependents("a.ts"); len(deps) != 0 {
+		t.Fatalf("expected no dependents, got %v", deps)
+	}
+}
+
+func TestDependents_Go_PackageSiblingsAndImporter(t *testing.T) {
+	idx := goIndex("example.com/m")
+	// service.go and helper.go share a package (same-scope siblings —
+	// both are mutual dependents of each other via SameScopeFiles).
+	// caller.go imports the package via a real import path.
+	helperFacts := &model.FileFacts{Lang: model.LangGo, File: "internal/svc/helper.go",
+		Entities: []model.Entity{goEntity(model.KindFunction, "internal/svc#process", "process")}}
+	serviceFacts := &model.FileFacts{Lang: model.LangGo, File: "internal/svc/service.go"}
+	callerFacts := &model.FileFacts{
+		Lang: model.LangGo, File: "cmd/main.go",
+		Imports: []model.ImportBinding{{LocalName: "svc", Source: "example.com/m/internal/svc", IsNamespace: true}},
+	}
+	idx.AddFile(helperFacts)
+	idx.AddFile(serviceFacts)
+	idx.AddFile(callerFacts)
+
+	deps := idx.Dependents("internal/svc/helper.go")
+	got := map[string]bool{}
+	for _, d := range deps {
+		got[d] = true
+	}
+	if !got["internal/svc/service.go"] {
+		t.Errorf("expected the package sibling service.go among dependents, got %v", deps)
+	}
+	if !got["cmd/main.go"] {
+		t.Errorf("expected the importing file cmd/main.go among dependents, got %v", deps)
+	}
+}

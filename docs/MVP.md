@@ -171,22 +171,35 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
 - Reader uses `os.ReadFile`, not a real `mmap` — a deliberate, documented scoping choice (ADR-0005)
   since no daemon exists yet to make mmap's advantage matter. Format is mmap-ready for later.
 
-### Daemon (`internal/watch`, `cmd/ctxd`) — ADR-0012
-- **Full reindex on every change, not true per-file incremental** — a deliberate V0 scoping
-  choice (measured: well under a second on this project's own 58-file source), not a small
-  optimization deferred casually. Real incremental indexing needs content-hash re-anchoring and
-  dependency tracking across the resolver's same-file/same-package/import tiers — genuinely
-  harder work, tracked via `docs/research/edge-case-backlog.md`'s `F1`-`F9` cases.
+### Daemon (`internal/watch`, `cmd/ctxd`) — ADR-0012, ADR-0020
+- ~~Full reindex on every change, not true per-file incremental~~ — **fixed**, ADR-0020:
+  `internal/index.Indexer` re-processes exactly the changed files plus everything
+  `resolve.Index.Dependents` finds could be affected (importers, barrel re-exporters, same-package
+  siblings), not the whole repo. Measured live against this project's own real, self-hosted source:
+  a single-file rename with one cross-file dependent completed in ~4ms, against ~960ms for a full
+  reindex of the same 105-file repo. The F1-F9 edge cases `docs/research/edge-case-backlog.md`
+  catalogued are addressed one by one in ADR-0020's own verification section — F6 (a real
+  `.git/HEAD` branch-change poller) remains explicitly out of scope, and F4 (file rename) is
+  correct but not zero-cost (see below).
+- `Dependents` is a linear scan over every registered file's own import table, not a maintained
+  reverse index — fast at today's scale; a real reverse index is a legitimate future optimization
+  once profiling (not intuition) says this scan is the bottleneck.
+- A pure file rename (unchanged content, new path) is handled correctly — the same entity ID
+  reappears under the new path, since `EntityID` excludes file by design — but costs one file's
+  worth of re-extraction rather than a true zero-cost re-anchor. A real content-hash-keyed rename
+  shortcut (matching an old path's removed content hash against a new path's added one, skipping
+  re-extraction entirely) is a known, honestly-reported optimization, not built.
 - fsnotify's kqueue/inotify backend costs one descriptor per watched *directory* — fine at any
   scale measured so far, but a real FSEvents binding (per
   `docs/research/05-watcher-and-invalidation.md`'s recommendation) is still the right answer
   before this runs against a repo with thousands of directories.
 - No exclusion churn quarantine, no `.git/HEAD` branch-change poller, no crash-reconcile-on-
-  restart — `ctxd` still runs in the foreground only. Multi-project watching itself is done
-  (ADR-0019: `ctxd <path> [<path>...]`, one goroutine and `opstatus.Tracker` per project); the
-  still-open gap is a real `ctxd project add/list` command that adds/removes a project from an
-  *already-running* daemon without restarting it. All explicitly deferred, catalogued in
-  `docs/research/edge-case-backlog.md`'s `F`/`G` sections.
+  restart needed (ADR-0020: `ctxd` always runs a fresh full index at startup, so a restart after
+  downtime naturally reconciles) — `ctxd` still runs in the foreground only. Multi-project watching
+  itself is done (ADR-0019: `ctxd <path> [<path>...]`, one goroutine, `opstatus.Tracker`, and now
+  one live `Indexer` per project); the still-open gap is a real `ctxd project add/list` command
+  that adds/removes a project from an *already-running* daemon without restarting it. All
+  explicitly deferred, catalogued in `docs/research/edge-case-backlog.md`'s `F`/`G` sections.
 - `internal/search`'s FTS5/fuzzy layer does not exist — exact and qualified-name lookup (a linear
   scan) cover today's real need; SQLite is deferred until a feature already needs it
   (ADR-0006).
@@ -211,9 +224,10 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
 
 - **C#/Python extraction** (Phase 3b/3c) — Go shipped first (ADR-0010); these two remain
   post-MVP.
-- **Daemon + incremental indexing + file watcher** (Phase 3d) — FSEvents on macOS, inotify on
-  Linux, content-hash re-anchoring; the watcher exclusion layers (static skip list, `.gitignore`,
-  adaptive churn quarantine) are designed in `docs/research/05` but not implemented.
+- **Daemon + file watcher remaining hardening** (Phase 3d) — true per-file incremental indexing is
+  now done (ADR-0020); FSEvents on macOS (still fsnotify's kqueue), the watcher exclusion layers
+  beyond the static skip list/`.gitignore` (adaptive churn quarantine), and a `.git/HEAD` branch-
+  change poller are designed in `docs/research/05` but not implemented.
 - **SQLite + FTS5 full-text search** (whenever SQLite is introduced for its already-scoped
   purposes — projects, decisions, ledger persistence, metrics).
 - **Historical batch validation of impact analysis** (Phase 4 was built, ADR-0014, but its
@@ -326,7 +340,16 @@ This closes every item in the weighted "easy win" batch (Paths, Quality, Operati
     `ts-basic` registered and watched together, switcher screenshot-confirmed scoping the entity
     table correctly per project, and a real source edit to the watched fixture visibly updating
     the already-open browser tab's entity count with no reload.
-16. Next after that, per the deferred list above: C#/Python extractors (Phase 3b/3c), true
-    per-file incremental indexing, the similarity/duplicate engine (Phase 5), or the
-    global-install/system-service work (Phase 9) — prioritized by real usage feedback, not by
-    continuing to iterate against one synthetic fixture.
+16. ~~True per-file incremental indexing~~ — done, ADR-0020, picked by the user after a weighted
+    review of the remaining large backlog items: `internal/index.Indexer` (a live graph + resolver
+    held across updates), `graph.RemoveEntity/RemoveFile`, `resolve.Index.Dependents` (the reverse
+    "who imports this file" lookup, built without the core resolver branching on language), and
+    `watch.Events()` now reporting actual changed paths. Every F1-F9 edge case
+    `docs/research/edge-case-backlog.md` catalogued is addressed (verification detail in
+    ADR-0020). Verified live against this project's own real, self-hosted, running `ctxd`: a
+    cross-file rename correctly propagated to the importing file (resolved -> bug-resolver and
+    back) in ~4ms, against ~960ms for a full reindex of the same 105-file repo.
+17. Next after that, per the deferred list above: C#/Python extractors (Phase 3b/3c), the
+    similarity/duplicate engine (Phase 5), or the global-install/system-service work (Phase 9) —
+    prioritized by real usage feedback, not by continuing to iterate against one synthetic
+    fixture.

@@ -88,6 +88,21 @@ func (p *goPolicy) FollowImportToMethods(idx *Index, file string, fe *fileEntry,
 	return nil, false
 }
 
+// ResolveImportTarget exposes resolveImportPath standalone for
+// Index.Dependents (ADR-0020) — a Go import resolves to a whole package
+// directory, so every file in it is returned (a copy, since
+// idx.filesByDir[dir] is a live slice callers must not mutate).
+func (p *goPolicy) ResolveImportTarget(idx *Index, file, source string) ([]string, bool) {
+	dir, internal, found := p.resolveImportPath(idx, source)
+	if !internal || !found {
+		return nil, false
+	}
+	files := idx.filesByDir[dir]
+	out := make([]string, len(files))
+	copy(out, files)
+	return out, true
+}
+
 func (p *goPolicy) IsBuiltin(name string) bool { return goBuiltins[name] }
 
 // FinalDisposition: Go has no bare-name allowlist tier, and does not need

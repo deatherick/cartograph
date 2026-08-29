@@ -64,6 +64,23 @@ type LanguagePolicy interface {
 	// concept).
 	FollowImportToMethods(idx *Index, file string, fe *fileEntry, receiverType string) (methods map[string]model.EntityID, ok bool)
 
+	// ResolveImportTarget resolves an import/re-export source string (an
+	// model.ImportBinding's or model.ReExport's Source field — this takes
+	// the raw string rather than either struct so both call the same
+	// method) to the registered file(s) it points to, from the
+	// perspective of file (the file containing that import statement).
+	// ok=false means source doesn't resolve to anything indexed (an
+	// external package, or an internal path this index never walked).
+	// A single-file-per-module language (TypeScript) returns at most one
+	// path; a directory-scoped language (Go, where an import resolves to
+	// a whole package) returns every file in that directory. This is what
+	// Index.Dependents (ADR-0020) uses to find "who imports file X"
+	// without the core resolver ever branching on language — each
+	// policy's existing internal import-path resolution
+	// (ResolveQualifiedImport/ResolveUnqualifiedImport already compute
+	// this internally) is simply exposed standalone here.
+	ResolveImportTarget(idx *Index, file, source string) (files []string, ok bool)
+
 	// IsBuiltin reports whether name is a language runtime/predeclared
 	// identifier — never a repo entity, never a potential bug, regardless
 	// of how many (zero) repo-wide candidates share its name.

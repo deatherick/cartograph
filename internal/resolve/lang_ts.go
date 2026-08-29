@@ -104,6 +104,17 @@ func (p *tsPolicy) FollowImportToMethods(idx *Index, file string, fe *fileEntry,
 	return nil, false
 }
 
+// ResolveImportTarget exposes resolveImportPath standalone for
+// Index.Dependents (ADR-0020) — a namespace-per-file language always
+// resolves to at most one file.
+func (p *tsPolicy) ResolveImportTarget(idx *Index, file, source string) ([]string, bool) {
+	target, ok := p.resolveImportPath(idx, file, source)
+	if !ok {
+		return nil, false
+	}
+	return []string{target}, true
+}
+
 func (p *tsPolicy) IsBuiltin(name string) bool { return knownGlobals[name] }
 
 func (p *tsPolicy) FinalDisposition(idx *Index, ref model.Ref, kind model.EdgeKind) model.ResolvedRef {

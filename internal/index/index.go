@@ -1,35 +1,31 @@
-// Package index orchestrates a full (non-incremental) index of a repo:
-// walk files, extract each with the matching language extractor, resolve
-// every ref across the whole repo, and build the in-memory graph.
-// Incremental re-indexing (content-hash-based re-anchoring, the watcher)
-// is Phase 3 — this is deliberately the simplest thing that can work
-// end-to-end, per the project's own "vertical slice, not everything at
-// once" principle.
+// Package index orchestrates indexing a repo: walk files, extract each
+// with the matching language extractor, resolve every ref, and build the
+// in-memory graph. Run is the one-shot full index every non-daemon caller
+// uses (`ctx index`, ctxbench, tests); Indexer (indexer.go) is the
+// stateful, incremental counterpart cmd/ctxd uses — one FullIndex at
+// startup, then repeated UpdateFiles calls as its watcher reports changed
+// paths, re-processing only the affected files (and whatever else their
+// change could affect — see resolve.Index.Dependents) instead of
+// re-walking the whole tree every time. See ADR-0020 for the design.
 package index
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
-	"github.com/deatherick/cartograph/internal/exclude"
 	"github.com/deatherick/cartograph/internal/graph"
 	"github.com/deatherick/cartograph/internal/model"
-	"github.com/deatherick/cartograph/internal/parser"
-	"github.com/deatherick/cartograph/internal/resolve"
 )
 
 // Stats summarizes one index run — the numbers Phase 1's exit criteria
 // check (see the project plan): file/entity/edge counts, wall time, and
 // the disposition breakdown that bug_rate is computed from.
 type Stats struct {
-	Files          int
-	Entities       int
-	ResolvedEdges  int
-	Dispositions   map[model.Disposition]int
-	Duration       time.Duration
+	Files         int
+	Entities      int
+	ResolvedEdges int
+	Dispositions  map[model.Disposition]int
+	Duration      time.Duration
 }
 
 // BugRate is (bug-extractor + bug-resolver) / total dispositions —
@@ -65,80 +61,17 @@ type Result struct {
 // graph plus run statistics. repo is the identity namespace entities are
 // scoped to (see docs/adr/0003-data-model.md) — typically the repo's
 // directory name, but callers may pass anything stable.
+//
+// A thin one-shot wrapper over Indexer.FullIndex (ADR-0020) — every
+// caller that just wants "index once and get a Result" (the CLI's `ctx
+// index`, ctxbench, tests) keeps this exact signature; cmd/ctxd is the
+// one caller that needs the live Indexer itself, to follow FullIndex with
+// incremental UpdateFiles calls as its watcher reports changes.
 func Run(ctx context.Context, root, repo string) (*Result, error) {
-	start := time.Now()
-	langs := enabledLanguages(root)
-
-	exts := map[string]parser.Extractor{}
-	resolverIdx := resolve.NewIndex(repo)
-	for _, l := range langs {
-		for _, ext := range l.Extractor.Extensions() {
-			exts[ext] = l.Extractor
-		}
-		resolverIdx.RegisterPolicy(l.Policy)
-	}
-
-	var allFacts []*model.FileFacts
-	err := exclude.WalkSource(root, func(path string, content []byte) error {
-		ext := filepath.Ext(path)
-		extractor, ok := exts[ext]
-		if !ok {
-			return nil // not a recognized source file, or its language is disabled; skip silently
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return relErr
-		}
-		facts, extractErr := extractor.Extract(ctx, repo, rel, content)
-		if extractErr != nil {
-			// A single file's parse failure (high error ratio, timeout)
-			// does not abort the whole index — it is reported and
-			// skipped, matching the fail-soft principle documented in
-			// docs/research/08-process-architecture-and-residuals.md
-			// (Grafel: an over-cap marshal aborts cleanly rather than
-			// crashing the whole daemon). Surfacing per-file failures
-			// as first-class Stats output is a documented follow-up;
-			// today they are silently skipped, which is the wrong
-			// default long-term but an honest, visible gap for Phase 1.
-			fmt.Fprintf(os.Stderr, "index: skipping %s: %v\n", rel, extractErr)
-			return nil
-		}
-		allFacts = append(allFacts, facts)
-		return nil
-	})
+	ix := NewIndexer(root, repo)
+	stats, err := ix.FullIndex(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("index: walking %s: %w", root, err)
+		return nil, err
 	}
-
-	for _, f := range allFacts {
-		resolverIdx.AddFile(f)
-	}
-
-	g := graph.New()
-	for _, f := range allFacts {
-		for _, e := range f.Entities {
-			g.AddEntity(e)
-		}
-	}
-
-	stats := Stats{
-		Files:        len(allFacts),
-		Dispositions: map[model.Disposition]int{},
-	}
-	for _, f := range allFacts {
-		stats.Entities += len(f.Entities)
-	}
-
-	for _, f := range allFacts {
-		for _, resolved := range resolverIdx.Resolve([]*model.FileFacts{f}) {
-			stats.Dispositions[resolved.Disposition]++
-			if resolved.Disposition == model.DispositionResolved && resolved.Edge != nil {
-				g.AddEdge(*resolved.Edge)
-				stats.ResolvedEdges++
-			}
-		}
-	}
-
-	stats.Duration = time.Since(start)
-	return &Result{Graph: g, Stats: stats}, nil
+	return &Result{Graph: ix.Graph(), Stats: stats}, nil
 }

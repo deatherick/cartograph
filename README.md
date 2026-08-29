@@ -146,10 +146,10 @@ serves the old one until you re-index by hand. `ctxd` does that automatically:
 ./bin/ctxd ~/path/to/some/project   # indexes once, then watches and re-indexes on every change
 ```
 
-Runs in the foreground until `Ctrl+C`. This is a V0: it re-indexes the **whole** project on every
-change (not yet a true per-file incremental update — see
-[ADR-0012](docs/adr/0012-daemon-watcher-and-global-install-requirements.md) for why that's a
-deliberate, measured scoping choice, not an oversight) and doesn't yet run as a background system
+Runs in the foreground until `Ctrl+C`. It re-indexes only the files a change actually affects — the
+changed file(s) plus anything that imports them ([ADR-0020](docs/adr/0020-true-incremental-indexing.md):
+a real cross-file rename in this project's own 105-file source completed in ~4ms, against ~960ms
+for a full reindex) — not the whole project every time. It doesn't yet run as a background system
 service — see
 [`docs/requirements/phase9-global-install-and-daemon.md`](docs/requirements/phase9-global-install-and-daemon.md)
 for that design, captured but not built yet.
@@ -227,8 +227,8 @@ The honest list, kept current in [`docs/MVP.md`](docs/MVP.md#consolidated-known-
   ([ADR-0010](docs/adr/0010-go-extractor-and-self-hosting.md)).
 - **No staleness detection with plain `ctx index`.** Editing source silently serves the old
   snapshot until you re-index by hand, unless `ctxd` is running for that project (see
-  [Keeping the index fresh](#keeping-the-index-fresh-ctxd) above) — and even then, it's a full
-  reindex on change, not yet true per-file incremental.
+  [Keeping the index fresh](#keeping-the-index-fresh-ctxd) above), which now re-indexes
+  incrementally, not the whole project on every change.
 - **No fuzzy/full-text search.** `find`/`inspect`/`related`/`source` need an exact bare name or
   qualified name (`file#Name`). No SQLite/FTS5 yet — deliberately deferred, see
   [ADR-0006](docs/adr/0006-phase1-completion-and-search-scope.md).
