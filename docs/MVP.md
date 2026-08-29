@@ -13,7 +13,7 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 0a — Discovery on Grafel | ✅ Done |
 | 0b — Foundations, `ctxbench` | ✅ Done |
 | 1 — TypeScript static map | ✅ Done (ADR-0004/0005/0006) |
-| 2 — Context Compiler + MCP | ✅ Done — Context Compiler (ADR-0007), MCP server (ADR-0008), live agent demo (ADR-0009). **Only a README quickstart stands between here and MVP.** |
+| 2 — Context Compiler + MCP | ✅ Done — Context Compiler (ADR-0007), MCP server (ADR-0008), live agent demo (ADR-0009), README quickstart. **MVP shipped.** |
 | 3 — Go/C#/Python, daemon, incremental indexing | ⬜ Post-MVP (this session's decision) |
 | 4-9 — Impact analysis, duplicates, Web UI, cross-repo, AI, hardening | ⬜ Post-MVP |
 
@@ -62,10 +62,14 @@ Phase 2 still required for MVP**, not a nice-to-have.
       bare slice — neither was caught by this project's own tests before real usage). After the
       fix: zero raw grep/bash/read calls (vs 6 in the no-MCP baseline), no subagent delegation
       needed, -55.5% real dollar cost, same correct answer.
-- [ ] A short `README.md` quickstart a new user/contributor can follow without reading every ADR
+- [x] A short `README.md` quickstart a new user/contributor can follow without reading every ADR
+      — install/prerequisites, a zero-setup Quickstart against the vendored `fixtures/ts-basic`
+      with real verified command output (not fabricated), CLI usage, MCP usage with a working
+      `.mcp.json` example, a Known limitations section, and a documentation map. Every command
+      shown was actually run against a clean-room build (`rm -rf bin ~/.cartograph && make
+      build`) to confirm it works exactly as written.
 
-Everything above except the three unchecked items is done, tested, and measured. Those three are
-the entire remaining MVP scope.
+**All Definition of Done items are complete. The MVP has shipped.**
 
 ## Consolidated known issues (not blocking MVP, but should not be forgotten)
 
@@ -158,8 +162,8 @@ rediscover this later" list.
 1. ~~MCP server~~ — done, ADR-0008.
 2. ~~Live demo~~ — done, ADR-0009. Found and fixed a real schema-validation bug in
    `context_find`/`context_related` along the way.
-3. **README quickstart** — a new user/contributor should be able to clone, build, index a repo,
-   and run one query without reading 8 ADRs first. **The only item left before MVP.**
-4. Once that ships: MVP is done. Anything after that is Phase 3+ per this document's deferred
-   list, prioritized by real usage feedback from the live demo, not by continuing to iterate on
-   ranker constants against one synthetic fixture.
+3. ~~README quickstart~~ — done. A new user/contributor can clone, build, index a repo, and run
+   one query without reading 8 ADRs first.
+4. **MVP is done.** Everything from here is Phase 3+ per this document's deferred list,
+   prioritized by real usage feedback from the live demo, not by continuing to iterate on ranker
+   constants against one synthetic fixture.
