@@ -1,5 +1,5 @@
 // Command ctxd is the context engine daemon. Not yet implemented — arrives
-// with Fase 3 (watcher, incremental indexing, project manager).
+// with Phase 3 (watcher, incremental indexing, project manager).
 package main
 
 import (

@@ -1,41 +1,42 @@
-# Research — discovery sobre Grafel (Fase 0a)
+# Research — discovery on Grafel (Phase 0a)
 
-Grafel (`cajasmota/grafel`, Go, MIT) se clonó en `~/code/_ref/grafel` y se leyó a fondo para no
-volver a resolver los problemas que ya resolvió. **No se copió código.** Estas notas registran,
-por tema: cuál es el problema, cómo lo resolvieron, cómo lo resolvemos nosotros y por qué distinto.
+Grafel (`cajasmota/grafel`, Go, MIT) was cloned into `~/code/_ref/grafel` and read thoroughly so
+as not to re-solve problems it already solved. **No code was copied.** These notes record,
+by topic: what the problem is, how they solved it, how we solve it, and why differently.
 
-Escala del repo estudiado: 9,063 archivos, 27 ADRs, ~21k líneas solo en el extractor de TS/JS.
+Scale of the repo studied: 9,063 files, 27 ADRs, ~21k lines in the TS/JS extractor alone.
 
-## Notas
+## Notes
 
-| Nota | Tema | Hallazgo principal |
+| Note | Topic | Main finding |
 |---|---|---|
-| [01](01-parser-y-binding-treesitter.md) | Parser y binding de tree-sitter | El binding `smacker` está muerto; usar el oficial desde el día 1. Ellos tienen **cero archivos `.scm`** y 21k líneas de traversal manual para TS/JS, con el binding filtrado a 245 archivos |
-| [02](02-refs-y-dispositions.md) | Refs y dispositions | Su mejor idea: taxonomía de dispositions + `bug_rate = (bug-extractor + bug-resolver) / total` como métrica auditable. Su peor decisión: transportar refs como strings con gramática mágica |
-| [03](03-resolucion-imports-y-bare-names.md) | Resolución | Bare names = mayor fuente de falsos positivos. Allowlist + exclusión de nombres genéricos + tabla de imports por archivo + tipo estático del receiver, en orden fijo |
-| [04](04-almacenamiento-y-formato-de-grafo.md) | Almacenamiento | JSON→FlatBuffers les dio **80×** en cold open (132ms→1.6ms). Dejaron abierto: aristas por string ID ⇒ vecinos en **O(R)**. Lo cerramos con IDs enteros + CSR |
-| [05](05-watcher-e-invalidacion.md) | Watcher | **macOS/kqueue gasta 1 descriptor por archivo**: 40,079 fds para un repo, 65% del techo del proceso. Usamos FSEvents. Más: exclusiones en 3 capas con cuarentena adaptativa |
-| [06](06-medicion-de-tokens.md) | Medición de tokens | Su benchmark mide tokens y **no mide corrección**. Siempre se ahorran tokens devolviendo menos |
-| [07](07-identidad-taxonomia-y-cross-repo.md) | Identidad y taxonomía | Su ADR contradice su código en el `EntityID`. Excluir la línea es correcto y hace colisionar sobrecargas y `partial` por construcción |
-| [08](08-arquitectura-de-proceso-y-residuals.md) | Proceso y residuals | Handoff escritor/lector por archivo atómico + mmap + mtime, sin locks. Y el dato de calibración más útil: **su bug-rate real es 8–12%** |
-| [09](09-assessment-y-decisiones.md) | **Assessment** | Qué adoptamos, qué adaptamos, qué descartamos, licencia, y los 7 cambios que esto introduce en el plan |
-| [backlog](backlog-casos-borde.md) | Casos borde | **80 casos** derivados de sus bugs reales, listos para ser fixtures |
+| [01](01-parser-and-treesitter-binding.md) | Parser and tree-sitter binding | The `smacker` binding is dead; use the official one from day 1. They have **zero `.scm` files** and 21k lines of manual traversal for TS/JS, with the binding filtered down to 245 files |
+| [02](02-refs-and-dispositions.md) | Refs and dispositions | Their best idea: dispositions taxonomy + `bug_rate = (bug-extractor + bug-resolver) / total` as an auditable metric. Their worst decision: transporting refs as strings with magic grammar |
+| [03](03-import-resolution-and-bare-names.md) | Resolution | Bare names = biggest source of false positives. Allowlist + generic-name exclusion + per-file import table + receiver static type, in fixed order |
+| [04](04-storage-and-graph-format.md) | Storage | JSON→FlatBuffers gave them **80×** on cold open (132ms→1.6ms). They left open: edges by string ID ⇒ neighbors in **O(R)**. We close it with integer IDs + CSR |
+| [05](05-watcher-and-invalidation.md) | Watcher | **macOS/kqueue spends 1 descriptor per file**: 40,079 fds for a repo, 65% of the process ceiling. We use FSEvents. Also: three-layer exclusions with adaptive quarantine |
+| [06](06-token-measurement.md) | Token measurement | Their benchmark measures tokens and **doesn't measure correctness**. Tokens are always saved by returning less |
+| [07](07-identity-taxonomy-and-cross-repo.md) | Identity and taxonomy | Their ADR contradicts their code in `EntityID`. Excluding the line is correct and makes overloads and `partial` collide by construction |
+| [08](08-process-architecture-and-residuals.md) | Process and residuals | Writer/reader handoff via atomic file + mmap + mtime, no locks. Plus the most useful calibration data point: **their real bug-rate is 8–12%** |
+| [09](09-assessment-and-decisions.md) | **Assessment** | What we adopt, what we adapt, what we discard, license, and the 7 changes this introduces to the plan |
+| [backlog](edge-case-backlog.md) | Edge cases | **80 cases** derived from their real bugs, ready to become fixtures |
 
-## Los cinco hallazgos que cambian el plan
+## The five findings that change the plan
 
-1. **macOS/kqueue agota descriptores** (nota 05) — bloqueador real en nuestra plataforma primaria,
-   no una optimización. FSEvents en darwin.
-2. **`encoding/gob` estaba mal elegido** (nota 04) — sus números demuestran que cualquier formato
-   con decode O(N) es el piso de latencia de *cada* llamada. Snapshot binario mmap-able con
-   adyacencia CSR, que además cierra el O(R) que ellos dejaron abierto.
-3. **Cero uso de queries de tree-sitter** (nota 01) — 21k líneas de traversal manual para TS/JS.
-   Nuestra apuesta principal, y el riesgo principal del plan.
-4. **La taxonomía de dispositions y el `bug_rate`** (nota 02) — métrica de calidad del grafo que
-   no estaba en el plan y que se vuelve gate de CI. Calibración: 8–12% es lo normal.
-5. **Su benchmark de tokens no mide corrección** (nota 06) — confirma que `recall@gold` junto al
-   ahorro no es un detalle metodológico, es lo que separa una medición honesta de una inútil.
+1. **macOS/kqueue exhausts descriptors** (note 05) — a real blocker on our primary platform,
+   not an optimization. FSEvents on darwin.
+2. **`encoding/gob` was the wrong choice** (note 04) — their numbers prove that any format
+   with O(N) decode is the latency floor of *every* call. Mmap-able binary snapshot with
+   CSR adjacency, which also closes the O(R) they left open.
+3. **Zero use of tree-sitter queries** (note 01) — 21k lines of manual traversal for TS/JS.
+   Our main bet, and the plan's main risk.
+4. **The dispositions taxonomy and `bug_rate`** (note 02) — a graph-quality metric that
+   wasn't in the plan and becomes a CI gate. Calibration: 8–12% is normal.
+5. **Their token benchmark doesn't measure correctness** (note 06) — confirms that `recall@gold`
+   alongside savings isn't a methodological detail, it's what separates an honest measurement
+   from a useless one.
 
-## Regla de uso
+## Usage rule
 
-`~/code/_ref/grafel` es referencia de lectura, fuera del repo del proyecto. Nunca submódulo,
-nunca dependencia, nunca vendorizado. Ver [09](09-assessment-y-decisiones.md) §4 para licencia.
+`~/code/_ref/grafel` is a read-only reference, outside the project's repo. Never a submodule,
+never a dependency, never vendored. See [09](09-assessment-and-decisions.md) §4 for license.

@@ -1,5 +1,5 @@
 // Command ctxbench is the token-economy benchmark harness. It is built
-// before the product itself (Fase 0b) precisely so the project has a
+// before the product itself (Phase 0b) precisely so the project has a
 // measuring stick from day one — see docs/adr and docs/research/06 for why
 // Grafel's own bench-tokens tool (tokens only, no correctness signal) is not
 // enough on its own.
@@ -16,11 +16,11 @@
 //     files in full, with no exploration tax at all. An agent can never do
 //     better than this without the graph, even with perfect luck.
 //
-// Once the Context Compiler exists (Fase 2), this same harness gains a
+// Once the Context Compiler exists (Phase 2), this same harness gains a
 // --capsule mode that additionally reports tokens_capsule, recall@gold, and
-// precision@gold side by side with these baselines — an ahorro de tokens
-// number is never reported without recall next to it (see
-// docs/research/06-medicion-de-tokens.md).
+// precision@gold side by side with these baselines — a token-savings number
+// is never reported without recall next to it (see
+// docs/research/06-token-measurement.md).
 package main
 
 import (
@@ -71,7 +71,7 @@ func main() {
 	flag.Parse()
 
 	if !*baseline {
-		fmt.Fprintln(os.Stderr, "ctxbench: no mode selected. Use --baseline. (--capsule arrives with the Context Compiler in Fase 2.)")
+		fmt.Fprintln(os.Stderr, "ctxbench: no mode selected. Use --baseline. (--capsule arrives with the Context Compiler in Phase 2.)")
 		os.Exit(2)
 	}
 
@@ -186,7 +186,7 @@ func readGoldFiles(fixtureDir string, goldFiles []string) (tokens int, combined 
 func printReport(ts *taskSet, results []taskResult) {
 	fmt.Printf("# Token-economy baseline — fixture %q\n\n", ts.Fixture)
 	fmt.Printf("%d tasks. Tokens counted with cl100k_base (real BPE, embedded offline — see internal/tokencount).\n", len(results))
-	fmt.Println("capsule tokens: N/A — Context Compiler not implemented yet (Fase 2). This report establishes the baseline it will be measured against.")
+	fmt.Println("capsule tokens: N/A — Context Compiler not implemented yet (Phase 2). This report establishes the baseline it will be measured against.")
 	fmt.Println()
 	fmt.Println("| Task | Gold files | Oracle tokens | Traced tokens | char/4 estimator ratio |")
 	fmt.Println("|---|---:|---:|---:|---:|")
@@ -213,8 +213,8 @@ func printReport(ts *taskSet, results []taskResult) {
 	}
 
 	fmt.Println()
-	fmt.Println("These two numbers are what the Context Compiler (Fase 2) must beat, together with")
-	fmt.Println("recall@gold ≥ 0.85 — an ahorro-de-tokens number is never reported without recall")
-	fmt.Println("next to it (docs/research/06-medicion-de-tokens.md). Target: ≥70% reduction vs the")
+	fmt.Println("These two numbers are what the Context Compiler (Phase 2) must beat, together with")
+	fmt.Println("recall@gold ≥ 0.85 — a token-savings number is never reported without recall")
+	fmt.Println("next to it (docs/research/06-token-measurement.md). Target: ≥70% reduction vs the")
 	fmt.Println("traced baseline, at recall@gold ≥ 0.85.")
 }

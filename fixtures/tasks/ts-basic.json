@@ -1,6 +1,6 @@
 {
   "fixture": "ts-basic",
-  "note": "Gold sets are whole-file for V0 (Fase 0b). Per-entity/line-range gold sets are a Fase 2 refinement once the resolver and Context Compiler exist — see docs/adr/0003-data-model.md. Grep steps are executed literally against the fixture tree, not fabricated, so the traced baseline is reproducible.",
+  "note": "Gold sets are whole-file for V0 (Phase 0b). Per-entity/line-range gold sets are a Phase 2 refinement once the resolver and Context Compiler exist — see docs/adr/0003-data-model.md. Grep steps are executed literally against the fixture tree, not fabricated, so the traced baseline is reproducible.",
   "tasks": [
     {
       "id": "T01",

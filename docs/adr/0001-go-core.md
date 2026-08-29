@@ -1,34 +1,34 @@
-# ADR-0001: Core en Go
+# ADR-0001: Go core
 
 - **Status**: Accepted
 - **Date**: 2026-08-29
 
-## Contexto
+## Context
 
-Se evaluaron Go, Rust, un híbrido Go+Rust y TypeScript/Node para el core (parser, grafo,
-resolver, compilador de contexto, daemon).
+Go, Rust, a Go+Rust hybrid, and TypeScript/Node were evaluated for the core (parser, graph,
+resolver, context compiler, daemon).
 
-## Decisión
+## Decision
 
-**Go.** Single binary, cross-compile trivial, bindings de tree-sitter maduros y mantenidos
-(`tree-sitter/go-tree-sitter`), daemon barato en memoria/CPU, y es el mismo lenguaje en el que
-Grafel resolvió ya un volumen enorme de casos borde de resolución — reimplementar ese
-conocimiento en el mismo lenguaje que se estudió reduce el riesgo de traducción.
+**Go.** Single binary, trivial cross-compile, mature and maintained tree-sitter bindings
+(`tree-sitter/go-tree-sitter`), a daemon that's cheap on memory/CPU, and it's the same language
+in which Grafel already resolved a huge volume of edge cases in resolution — reimplementing that
+knowledge in the same language it was studied in reduces translation risk.
 
-## Consecuencias
+## Consequences
 
-- Concurrencia con goroutines/channels encaja bien con indexado paralelo por archivo y con el
+- Concurrency with goroutines/channels fits well with parallel per-file indexing and with the
   watcher.
-- Sin runtime de VM, sin JVM, sin dependencia de Docker para distribuir.
-- Se pierde el ecosistema de tooling de análisis estático de Rust (borrow checker) para el
-  Similarity Engine; se acepta el riesgo — ver docs/research para el estado del arte que ya
-  existe en Go vía `gonum/graph` y afines.
+- No VM runtime, no JVM, no Docker dependency for distribution.
+- We lose Rust's static-analysis tooling ecosystem (borrow checker) for the
+  Similarity Engine; the risk is accepted — see docs/research for the state of the art that
+  already exists in Go via `gonum/graph` and similar.
 
-## Alternativas consideradas
+## Alternatives considered
 
-- **Rust puro**: máximo control y rendimiento, pero reconstruir extractores, resolvers e
-  indexado incremental desde cero alarga significativamente el V0.
-- **Híbrido Go+Rust** (similarity engine vía FFI): complejidad de build/CI desde el día 1, sin
-  beneficio claro hasta que el Similarity Engine (Fase 5) exista y se mida.
-- **TypeScript/Node**: un solo lenguaje con la UI, pero peor rendimiento en repos grandes y
-  daemon más pesado en memoria.
+- **Pure Rust**: maximum control and performance, but rebuilding extractors, resolvers, and
+  incremental indexing from scratch significantly lengthens V0.
+- **Go+Rust hybrid** (similarity engine via FFI): build/CI complexity from day 1, with no
+  clear benefit until the Similarity Engine (Phase 5) exists and is measured.
+- **TypeScript/Node**: a single language with the UI, but worse performance on large repos and
+  a heavier daemon in memory.

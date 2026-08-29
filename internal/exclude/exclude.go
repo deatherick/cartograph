@@ -2,20 +2,20 @@
 // repository needs before treating its contents as source: skip dependency/
 // build directories, skip machine-generated lockfiles, and skip binary
 // content. Grafel's own design documents this need explicitly (§40 of the
-// project plan; see docs/research/05-watcher-e-invalidacion.md for the
+// project plan; see docs/research/05-watcher-and-invalidation.md for the
 // watcher-side exclusion layers), and cloning a real repo for ctxbench
 // (T-2026-08-29, comparing against typescript-node-express-realworld-example-app)
 // surfaced a concrete case: that repo's working tree includes a MongoDB
 // data directory of binary .wt files that a naive walker reads as text.
 //
 // This package is intentionally small and dependency-free so both ctxbench
-// (today) and the daemon's watcher (Fase 3) can share it — the project's
+// (today) and the daemon's watcher (Phase 3) can share it — the project's
 // standing rule is one implementation behind every consumer, never
 // duplicated logic between tools (see docs/adr and the "Restricciones
 // permanentes" section of the project plan).
 //
 // V0 scope: a static directory/file blacklist plus a binary-content sniff.
-// Respecting .gitignore is Fase 3 work (it requires real gitignore
+// Respecting .gitignore is Phase 3 work (it requires real gitignore
 // semantics — negations, nested files, glob precedence — which this
 // package does not attempt).
 package exclude

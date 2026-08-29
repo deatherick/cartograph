@@ -3,7 +3,7 @@
 //
 // Grafel's own token-economy benchmark (cmd/bench-tokens) estimates tokens as
 // len(s)/4 — an approximation whose error against a real tokenizer is never
-// measured (see docs/research/06-medicion-de-tokens.md). That is fine for
+// measured (see docs/research/06-token-measurement.md). That is fine for
 // English prose and understates/overstates code unpredictably: identifiers,
 // indentation, and punctuation tokenize very differently from prose.
 //
@@ -96,7 +96,7 @@ func Count(s string) int {
 // codebase and by Grafel's own benchmark) diverges from the real tokenizer
 // on s. Returned as a ratio: estimate/actual. 1.0 means no error. Used by
 // ctxbench to publish a measured deviation instead of an unbounded one (see
-// docs/research/06-medicion-de-tokens.md).
+// docs/research/06-token-measurement.md).
 func EstimatorError(s string) float64 {
 	actual := Count(s)
 	if actual == 0 {
