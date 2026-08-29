@@ -51,25 +51,16 @@ func (g *Graph) FanOut(e model.EntityID) []model.Edge { return g.out[e] }
 // FanIn returns e's incoming edges — who calls/extends/implements/uses it.
 func (g *Graph) FanIn(e model.EntityID) []model.Edge { return g.in[e] }
 
-// RelatedEntity pairs an entity with the depth at which BFS found it and
-// the edge that led there, so a caller can render "why is this related"
-// evidence instead of just a bare ID.
-type RelatedEntity struct {
-	Entity model.Entity
-	Depth  int
-	Via    model.Edge
-}
-
 // Related does a depth-limited BFS from start, following edges in both
 // directions (an entity's callers and callees are both "related" to it).
 // maxDepth <= 0 defaults to 2, a reasonable interactive default before the
 // Context Compiler's ranker (Phase 2) takes over relevance decisions.
-func (g *Graph) Related(start model.EntityID, maxDepth int) []RelatedEntity {
+func (g *Graph) Related(start model.EntityID, maxDepth int) []model.RelatedEntity {
 	if maxDepth <= 0 {
 		maxDepth = 2
 	}
 	visited := map[model.EntityID]bool{start: true}
-	var out []RelatedEntity
+	var out []model.RelatedEntity
 
 	type frontierItem struct {
 		id    model.EntityID
@@ -97,7 +88,7 @@ func (g *Graph) Related(start model.EntityID, maxDepth int) []RelatedEntity {
 			if !ok {
 				continue // dangling edge to an entity we never registered
 			}
-			out = append(out, RelatedEntity{Entity: ent, Depth: cur.depth + 1, Via: edge})
+			out = append(out, model.RelatedEntity{Entity: ent, Depth: cur.depth + 1, Via: edge})
 			frontier = append(frontier, frontierItem{next, cur.depth + 1})
 		}
 	}

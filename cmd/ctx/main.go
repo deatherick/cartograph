@@ -1,8 +1,8 @@
 // Command ctx is the CLI for the context engine. Phase 1 implements the
-// static-map subcommands (index/find/related/stats); Phase 2 adds
-// context/expand/session once the Context Compiler exists. See
-// internal/service's package doc for the current persistence scope gap
-// (every invocation re-indexes from scratch — no daemon, no store yet).
+// static-map subcommands: `index` runs the full pipeline and persists a
+// snapshot (internal/store); find/related/stats read that snapshot
+// instead of re-indexing. Phase 2 adds context/expand/session once the
+// Context Compiler exists.
 package main
 
 import (
@@ -26,19 +26,17 @@ func main() {
 	}
 
 	svc := service.New()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
 
 	var err error
 	switch os.Args[1] {
 	case "index":
-		err = runIndex(ctx, svc, os.Args[2:])
+		err = runIndex(svc, os.Args[2:])
 	case "find":
-		err = runFind(ctx, svc, os.Args[2:])
+		err = runFind(svc, os.Args[2:])
 	case "related":
-		err = runRelated(ctx, svc, os.Args[2:])
+		err = runRelated(svc, os.Args[2:])
 	case "stats":
-		err = runStats(ctx, svc, os.Args[2:])
+		err = runStats(svc, os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -53,10 +51,13 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `ctx — local code context engine (Phase 1: static map only)
 
 Usage:
-  ctx index <path>              index a repo and print summary stats
-  ctx find <path> <name>        find every entity with this bare name
-  ctx related <path> <name> [--depth N]   entities within N hops (default 2)
-  ctx stats <path>              print index statistics (entities, edges, bug_rate)`)
+  ctx index <path>              index a repo, persist a snapshot, print run stats
+  ctx find <path> <name>        find every entity with this bare name (reads snapshot)
+  ctx related <path> <name> [--depth N]   entities within N hops (reads snapshot)
+  ctx stats <path>              print snapshot summary (reads snapshot)
+
+find/related/stats read the snapshot persisted by the last `+"`ctx index`"+` run — they
+do not re-index. Run `+"`ctx index <path>`"+` first, and again after the source changes.`)
 }
 
 // repoName derives a stable repo identity from the given path when the
@@ -69,25 +70,27 @@ func repoName(root string) string {
 	return filepath.Base(strings.TrimRight(abs, string(filepath.Separator)))
 }
 
-func runIndex(ctx context.Context, svc *service.Service, args []string) error {
+func runIndex(svc *service.Service, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: ctx index <path>")
 	}
 	root := args[0]
-	stats, err := svc.Stats(ctx, root, repoName(root))
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	stats, err := svc.Index(ctx, root, repoName(root))
 	if err != nil {
 		return err
 	}
-	printStats(stats)
+	printIndexStats(stats)
 	return nil
 }
 
-func runFind(ctx context.Context, svc *service.Service, args []string) error {
+func runFind(svc *service.Service, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ctx find <path> <name>")
 	}
 	root, name := args[0], args[1]
-	entities, err := svc.Find(ctx, root, repoName(root), name)
+	entities, err := svc.Find(root, repoName(root), name)
 	if err != nil {
 		return err
 	}
@@ -101,7 +104,7 @@ func runFind(ctx context.Context, svc *service.Service, args []string) error {
 	return nil
 }
 
-func runRelated(ctx context.Context, svc *service.Service, args []string) error {
+func runRelated(svc *service.Service, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ctx related <path> <name> [--depth N]")
 	}
@@ -114,7 +117,7 @@ func runRelated(ctx context.Context, svc *service.Service, args []string) error 
 			}
 		}
 	}
-	related, err := svc.Related(ctx, root, repoName(root), name, depth)
+	related, err := svc.Related(root, repoName(root), name, depth)
 	if err != nil {
 		return err
 	}
@@ -129,20 +132,21 @@ func runRelated(ctx context.Context, svc *service.Service, args []string) error 
 	return nil
 }
 
-func runStats(ctx context.Context, svc *service.Service, args []string) error {
+func runStats(svc *service.Service, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: ctx stats <path>")
 	}
 	root := args[0]
-	stats, err := svc.Stats(ctx, root, repoName(root))
+	stats, err := svc.Stats(root, repoName(root))
 	if err != nil {
 		return err
 	}
-	printStats(stats)
+	fmt.Printf("repo:     %s\n", stats.Repo)
+	fmt.Printf("entities: %d\n", stats.Entities)
 	return nil
 }
 
-func printStats(s index.Stats) {
+func printIndexStats(s index.Stats) {
 	fmt.Printf("files:          %d\n", s.Files)
 	fmt.Printf("entities:       %d\n", s.Entities)
 	fmt.Printf("resolved edges: %d\n", s.ResolvedEdges)

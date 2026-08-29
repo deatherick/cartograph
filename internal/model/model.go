@@ -277,3 +277,13 @@ type FileFacts struct {
 	Imports    []ImportBinding
 	ErrorRatio float64 // from the parser's syntax-error gate
 }
+
+// RelatedEntity pairs an entity with the graph-traversal depth at which it
+// was found and the edge that led there — shared between internal/graph
+// (in-memory traversal) and internal/store (snapshot traversal) so a
+// caller gets the same shape regardless of which one served the query.
+type RelatedEntity struct {
+	Entity Entity
+	Depth  int
+	Via    Edge
+}
