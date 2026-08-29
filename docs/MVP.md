@@ -190,8 +190,14 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
 - `--file <substring>` disambiguation exists but there is no equivalent for `ctx context` itself
   — a task capsule can't currently be scoped to "only consider files matching X."
   Repo directory naming collisions across two different paths sharing a repo name are handled by
-  path hashing (`internal/store.RepoDir`), but there is still no real multi-project management
-  (`ctx project add/list/remove`, named in the master plan) — every command takes a raw path.
+  path hashing (`internal/store.RepoDir`).
+- ~~No real multi-project management~~ — **fixed**: `internal/project` (`ctx project
+  add/list/remove`), a small global name→path registry every CLI command's `<path>` argument
+  resolves through first (`ctx index myapp` works once `myapp` is registered). This is CLI-only
+  and purely a naming convenience — it is NOT the daemon-side multi-project registry a future
+  `ctxd` would need to watch/serve several projects from one running process (ADR-0012's
+  documented gap, unrelated and still open); MCP's tools also don't resolve through it yet
+  (their `root` argument stays "absolute path" only, a natural, not-yet-done follow-up).
 
 ## Explicitly deferred (post-MVP, tracked not forgotten)
 
@@ -273,7 +279,13 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
     names failing with a raw service error instead of a picker, a dropped `file` hint breaking
     disambiguation between linked views, and unbounded breadcrumb-history growth when
     self-navigating an isolated/self-referencing node.
-11. Next up: the "easy win" Grafel-inspired surfaces identified but not yet built (Paths —
+11. Weighted the remaining backlog by effort/value together with the user and started working
+    through the highest-value, lowest-effort items:
+    - ~~Object/schema-style `const` extraction~~ — done (item above, edge-case-backlog.md I11).
+    - ~~Multi-project registry (CLI)~~ — done, ADR-0016: `internal/project` +
+      `ctx project add/list/remove`, every command's `<path>` resolves a registered name first.
+    - Context Compiler seeding improvement — next.
+12. Next after that: the "easy win" Grafel-inspired surfaces identified but not yet built (Paths —
     shortest path between two entities, cheap given existing BFS infra; Quality — persisting and
     surfacing the `bug_rate`/disposition breakdown already computed at index time but not
     persisted; Operations — `ctxd`'s own watch/reindex status) — or, per the deferred list above,

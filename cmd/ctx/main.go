@@ -13,12 +13,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/deatherick/cartograph/internal/index"
+	"github.com/deatherick/cartograph/internal/project"
 	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
 )
@@ -53,6 +55,8 @@ func main() {
 		err = runStats(svc, os.Args[2:])
 	case "impact":
 		err = runImpact(svc, os.Args[2:])
+	case "project":
+		err = runProject(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -78,9 +82,15 @@ Usage:
   ctx stats <path>              print snapshot summary (reads snapshot)
   ctx impact <path> <name> [--depth N] [--file <substring>]   blast radius: what depends on this
   ctx impact <path> --git-diff [ref]   blast radius of every entity a git diff touched (default: HEAD)
+  ctx project add <name> <path>    register <path> under <name>
+  ctx project list                 show every registered project
+  ctx project remove <name>        unregister <name>
 
 find/related/stats read the snapshot persisted by the last `+"`ctx index`"+` run — they
-do not re-index. Run `+"`ctx index <path>`"+` first, and again after the source changes.`)
+do not re-index. Run `+"`ctx index <path>`"+` first, and again after the source changes.
+
+Every <path> argument above also accepts a name registered via `+"`ctx project add`"+` —
+`+"`ctx index myapp`"+` works exactly like `+"`ctx index ~/code/myapp`"+` once registered.`)
 }
 
 // flagValue returns the value following flag in args, or "" if flag is
@@ -209,7 +219,7 @@ func runLanguages(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: ctx languages <path>")
 	}
-	root := args[0]
+	root := project.Resolve(args[0])
 	cfg, hasConfig := index.LoadConfig(root)
 	available := index.AvailableLanguages(root)
 
@@ -265,7 +275,7 @@ func runIndex(svc *service.Service, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: ctx index <path>")
 	}
-	root := args[0]
+	root := project.Resolve(args[0])
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	stats, err := svc.Index(ctx, root, service.RepoName(root))
@@ -280,7 +290,7 @@ func runContext(svc *service.Service, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf(`usage: ctx context <path> "<task>" [--budget N] [--session ID]`)
 	}
-	root, task := args[0], args[1]
+	root, task := project.Resolve(args[0]), args[1]
 	budget := 2500
 	if v := flagValue(args, "--budget"); v != "" {
 		if b, perr := strconv.Atoi(v); perr == nil {
@@ -301,7 +311,7 @@ func runFind(svc *service.Service, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ctx find <path> <name>")
 	}
-	root, name := args[0], args[1]
+	root, name := project.Resolve(args[0]), args[1]
 	entities, err := svc.Find(root, service.RepoName(root), name)
 	if err != nil {
 		return err
@@ -314,7 +324,7 @@ func runInspect(svc *service.Service, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ctx inspect <path> <name> [--file <substring>]")
 	}
-	root, name := args[0], args[1]
+	root, name := project.Resolve(args[0]), args[1]
 	insp, err := svc.Inspect(root, service.RepoName(root), name, flagValue(args, "--file"))
 	if err != nil {
 		return err
@@ -327,7 +337,7 @@ func runSource(svc *service.Service, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ctx source <path> <name> [--file <substring>]")
 	}
-	root, name := args[0], args[1]
+	root, name := project.Resolve(args[0]), args[1]
 	src, e, err := svc.Source(root, service.RepoName(root), name, flagValue(args, "--file"))
 	if err != nil {
 		return err
@@ -340,7 +350,7 @@ func runRelated(svc *service.Service, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ctx related <path> <name> [--depth N] [--file <substring>]")
 	}
-	root, name := args[0], args[1]
+	root, name := project.Resolve(args[0]), args[1]
 	depth := 2
 	for i, a := range args {
 		if a == "--depth" && i+1 < len(args) {
@@ -361,7 +371,7 @@ func runStats(svc *service.Service, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: ctx stats <path>")
 	}
-	root := args[0]
+	root := project.Resolve(args[0])
 	stats, err := svc.Stats(root, service.RepoName(root))
 	if err != nil {
 		return err
@@ -375,7 +385,7 @@ func runImpact(svc *service.Service, args []string) error {
 		return fmt.Errorf(`usage: ctx impact <path> <name> [--depth N] [--file <substring>]
    or: ctx impact <path> --git-diff [ref]   (ref defaults to HEAD)`)
 	}
-	root := args[0]
+	root := project.Resolve(args[0])
 	depth := 0 // full transitive closure by default — see service.Impact's doc
 	if v := flagValue(args, "--depth"); v != "" {
 		if d, perr := strconv.Atoi(v); perr == nil {
@@ -429,4 +439,53 @@ func optionalFlagValue(args []string, flag string) string {
 		}
 	}
 	return ""
+}
+
+// runProject implements `ctx project add|list|remove` — the small, global
+// (not per-repo) name-to-path registry every other command's <path>
+// argument resolves through first (project.Resolve). Named explicitly in
+// the master plan's CLI/UX scope and tracked as a known gap in
+// docs/MVP.md until now.
+func runProject(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf(`usage: ctx project add <name> <path>
+   or: ctx project list
+   or: ctx project remove <name>`)
+	}
+	switch args[0] {
+	case "add":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: ctx project add <name> <path>")
+		}
+		if err := project.Add(args[1], args[2]); err != nil {
+			return err
+		}
+		abs, _ := filepath.Abs(args[2])
+		fmt.Printf("Registered %q -> %s\n", args[1], abs)
+		return nil
+	case "list":
+		projects, err := project.List()
+		if err != nil {
+			return err
+		}
+		if len(projects) == 0 {
+			fmt.Println("No projects registered. Register one with `ctx project add <name> <path>`.")
+			return nil
+		}
+		for _, p := range projects {
+			fmt.Printf("%-20s %s\n", p.Name, p.Path)
+		}
+		return nil
+	case "remove":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: ctx project remove <name>")
+		}
+		if err := project.Remove(args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("Removed %q (if it was registered).\n", args[1])
+		return nil
+	default:
+		return fmt.Errorf("unknown project subcommand %q — usage: ctx project add|list|remove", args[0])
+	}
 }

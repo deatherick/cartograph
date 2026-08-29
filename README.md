@@ -96,6 +96,17 @@ UI — one index, one graph, one `context` capsule spanning both):
 Cartograph indexes its own source this way too — `./bin/ctx index ~/code/cartograph` runs clean
 at 0.1% bug_rate ([ADR-0010](docs/adr/0010-go-extractor-and-self-hosting.md)).
 
+Typing the same path repeatedly gets old — register a short name once and every command above
+accepts it instead ([ADR-0016](docs/adr/0016-project-registry.md)):
+
+```bash
+./bin/ctx project add myapp ~/path/to/some/project
+./bin/ctx index myapp
+./bin/ctx find myapp SomeClassOrStructName
+./bin/ctx project list
+./bin/ctx project remove myapp
+```
+
 ### Choosing which languages run: `ctx init`
 
 Every language is opt-in/opt-out per project, not a fixed set — a language you don't want costs
