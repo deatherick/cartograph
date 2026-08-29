@@ -1,0 +1,139 @@
+{
+  "fixture": "ts-basic",
+  "note": "Gold sets are whole-file for V0 (Fase 0b). Per-entity/line-range gold sets are a Fase 2 refinement once the resolver and Context Compiler exist — see docs/adr/0003-data-model.md. Grep steps are executed literally against the fixture tree, not fabricated, so the traced baseline is reproducible.",
+  "tasks": [
+    {
+      "id": "T01",
+      "prompt": "Add punch-line quantity validation to placeOrder: reject any line with quantity <= 0.",
+      "gold_files": ["src/services/orderService.ts", "src/models/order.ts", "src/utils/validation.ts"],
+      "grep_steps": [
+        { "pattern": "placeOrder", "note": "find where orders are placed" },
+        { "pattern": "OrderLine", "note": "find the shape of an order line" },
+        { "pattern": "ValidationError", "note": "find how validation errors are raised" }
+      ]
+    },
+    {
+      "id": "T02",
+      "prompt": "Why does registering a user with an existing email fail, and where is that enforced?",
+      "gold_files": ["src/services/userService.ts", "src/repositories/userRepository.ts", "src/utils/validation.ts"],
+      "grep_steps": [
+        { "pattern": "register", "note": "find registration entrypoint" },
+        { "pattern": "findByEmail", "note": "find email lookup" },
+        { "pattern": "ValidationError", "note": "confirm error type" }
+      ]
+    },
+    {
+      "id": "T03",
+      "prompt": "Add an admin-only endpoint to promote a user, wiring controller -> service -> repository.",
+      "gold_files": [
+        "src/controllers/userController.ts",
+        "src/services/userService.ts",
+        "src/repositories/userRepository.ts",
+        "src/models/user.ts"
+      ],
+      "grep_steps": [
+        { "pattern": "promoteToAdmin", "note": "existing service method" },
+        { "pattern": "class UserController", "note": "controller shape" },
+        { "pattern": "isAdmin", "note": "existing admin check" }
+      ]
+    },
+    {
+      "id": "T04",
+      "prompt": "Is there an existing money-formatting helper I should reuse before adding a new one for percentages?",
+      "gold_files": ["src/utils/format.ts"],
+      "grep_steps": [
+        { "pattern": "formatCents", "note": "look for money formatting" },
+        { "pattern": "toFixed", "note": "look for rounding logic" }
+      ]
+    },
+    {
+      "id": "T05",
+      "prompt": "What breaks if I rename Order.status values from strings to a numeric enum?",
+      "gold_files": [
+        "src/models/order.ts",
+        "src/repositories/orderRepository.ts",
+        "src/services/orderService.ts",
+        "src/controllers/orderController.ts",
+        "tests/orderService.test.ts"
+      ],
+      "grep_steps": [
+        { "pattern": "status", "note": "find all usages of order status" },
+        { "pattern": "\"pending\"|\"paid\"|\"shipped\"|\"cancelled\"", "note": "find literal status values" }
+      ]
+    },
+    {
+      "id": "T06",
+      "prompt": "Add a welcome-email variant for admins that mentions their new permissions.",
+      "gold_files": ["src/services/emailService.ts", "src/services/userService.ts", "src/models/user.ts"],
+      "grep_steps": [
+        { "pattern": "welcomeEmail", "note": "existing email template" },
+        { "pattern": "promoteToAdmin", "note": "where admin promotion happens" }
+      ]
+    },
+    {
+      "id": "T07",
+      "prompt": "Add a test asserting that placing an order with a negative-price line is rejected.",
+      "gold_files": ["tests/orderService.test.ts", "src/services/orderService.ts", "src/models/order.ts"],
+      "grep_steps": [
+        { "pattern": "describe\\(\"OrderService\"", "note": "existing test suite" },
+        { "pattern": "placeOrder", "note": "method under test" }
+      ]
+    },
+    {
+      "id": "T08",
+      "prompt": "Where would a new HTTP route for listing a user's orders be wired in?",
+      "gold_files": ["src/controllers/orderController.ts", "src/services/orderService.ts", "src/index.ts"],
+      "grep_steps": [
+        { "pattern": "class OrderController", "note": "existing controller" },
+        { "pattern": "ordersForUser", "note": "existing service method" },
+        { "pattern": "orderController", "note": "wiring in entrypoint" }
+      ]
+    },
+    {
+      "id": "T09",
+      "prompt": "Is user password hashing production-ready, or is it a placeholder I should flag?",
+      "gold_files": ["src/services/userService.ts"],
+      "grep_steps": [
+        { "pattern": "hashPassword", "note": "find hashing implementation" }
+      ]
+    },
+    {
+      "id": "T10",
+      "prompt": "Add validation that an order's total does not exceed a per-user credit limit.",
+      "gold_files": [
+        "src/services/orderService.ts",
+        "src/models/order.ts",
+        "src/models/user.ts",
+        "src/utils/validation.ts"
+      ],
+      "grep_steps": [
+        { "pattern": "orderTotalCents", "note": "existing total calculation" },
+        { "pattern": "placeOrder", "note": "where to add the check" },
+        { "pattern": "interface User", "note": "check if a credit limit field exists" }
+      ]
+    },
+    {
+      "id": "T11",
+      "prompt": "List every place that constructs a User or Order object directly (not via the repository) — a refactor is about to change their shape.",
+      "gold_files": [
+        "src/repositories/userRepository.ts",
+        "src/repositories/orderRepository.ts",
+        "src/services/orderService.ts",
+        "tests/orderService.test.ts"
+      ],
+      "grep_steps": [
+        { "pattern": "id: crypto.randomUUID\\(\\)", "note": "object literal construction sites" },
+        { "pattern": ": User = \\{|: Order = \\{", "note": "typed object literal construction" }
+      ]
+    },
+    {
+      "id": "T12",
+      "prompt": "Add rate limiting to user registration — which layer should own it and what does it need access to?",
+      "gold_files": ["src/controllers/userController.ts", "src/services/userService.ts"],
+      "grep_steps": [
+        { "pattern": "class UserController", "note": "HTTP boundary" },
+        { "pattern": "register\\(", "note": "both controller and service entrypoints" }
+      ]
+    }
+  ]
+}
