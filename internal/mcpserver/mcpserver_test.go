@@ -155,6 +155,20 @@ func TestMCPServer_Source(t *testing.T) {
 	}
 }
 
+func TestMCPServer_Impact(t *testing.T) {
+	cs := connect(t)
+	root := fixtureRoot(t)
+	callTool(t, cs, "context_index", map[string]any{"root": root})
+
+	res := callTool(t, cs, "context_impact", map[string]any{"root": root, "name": "UserService", "file": "services"})
+	if res.IsError {
+		t.Fatalf("context_impact returned an error: %s", textOf(t, res))
+	}
+	if !strings.Contains(textOf(t, res), "direct callers") {
+		t.Errorf("expected impact output to include a direct-callers section, got: %s", textOf(t, res))
+	}
+}
+
 func TestMCPServer_Compile(t *testing.T) {
 	cs := connect(t)
 	root := fixtureRoot(t)
@@ -221,6 +235,7 @@ func TestMCPServer_StructuredContentIsAlwaysAnObject(t *testing.T) {
 		{"context_inspect", map[string]any{"root": root, "name": "UserService", "file": "services"}},
 		{"context_source", map[string]any{"root": root, "name": "register", "file": "services"}},
 		{"context_compile", map[string]any{"root": root, "task": "UserService register", "budget": 500}},
+		{"context_impact", map[string]any{"root": root, "name": "UserService", "file": "services"}},
 	}
 	for _, c := range cases {
 		t.Run(c.tool, func(t *testing.T) {

@@ -19,7 +19,8 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 3b/3c — C#, Python extractors | ⬜ Post-MVP (now a drop-in addition per ADR-0011, not a core rewrite) |
 | 3d — Daemon watcher (V0: full reindex on change, not per-file incremental) | ✅ Done (ADR-0012) — `internal/watch` + real `cmd/ctxd`, verified end-to-end |
 | 6 (V0) — Web UI: Overview, Search, Entity Inspector, bounded Graph | ✅ Done (ADR-0013) — served by `ctxd --web`, vanilla HTML/JS, no build step |
-| 4/5 — Impact analysis, duplicate/similarity engine (Web UI's Duplicates/Impact views depend on these) | ⬜ Post-MVP |
+| 4 — Impact analysis (`ctx impact`, git-diff-driven blast radius) | ✅ Done (ADR-0014) — unblocks the Web UI's Impact view |
+| 5 — Duplicate/similarity engine (Web UI's Duplicates view depends on this) | ⬜ Post-MVP |
 | 7-9 — Cross-repo, learned relationships, AI, hardening | ⬜ Post-MVP |
 
 ## What "MVP" means for this project
@@ -195,7 +196,10 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
   adaptive churn quarantine) are designed in `docs/research/05` but not implemented.
 - **SQLite + FTS5 full-text search** (whenever SQLite is introduced for its already-scoped
   purposes — projects, decisions, ledger persistence, metrics).
-- **Impact analysis + git awareness** (Phase 4) — `ctx impact`, git-diff-driven blast radius.
+- **Historical batch validation of impact analysis** (Phase 4 was built, ADR-0014, but its
+  original exit criterion — across 20 real historical commits, the proposed test set actually
+  contains the tests that commit touched, ≥80% of the time — was not run; needs a real repo with
+  meaningful history/coverage to validate against).
 - **Duplicate/Similarity Engine** (Phase 5) — the LSH funnel, the duplicate-decision UI concept.
 - **Web UI beyond the V0 slice** (Phase 6, ADR-0013 shipped Overview/Search/Inspector/bounded
   Graph) — entity classification/tagging, pattern identification as a first-class surface,
@@ -239,9 +243,17 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
    Search, Entity Inspector, and a bounded (never whole-repo) Graph view, verified end-to-end
    against this project's own self-hosted source. Duplicates/Impact stay deferred — no Phase 4/5
    data exists yet to show in them.
-9. Next up, per the deferred list above: C#/Python extractors (Phase 3b/3c — now a drop-in
-   addition per ADR-0011, not a core rewrite), true per-file incremental indexing, impact analysis
-   or the similarity engine (Phase 4/5, unblocking the Web UI's remaining views), or the
-   global-install/system-service work (Phase 9, requirements already captured) — prioritized by
-   real usage feedback, not by continuing to iterate on ranker constants against one synthetic
-   fixture.
+9. ~~Impact analysis (Phase 4)~~ — done, ADR-0014: `internal/store.Upstream` (a new directional,
+   incoming-edges-only, unlimited-depth traversal — impact analysis's actual question, distinct
+   from `Related`'s bidirectional interactive walk), `internal/gitdiff` (real `git diff` parsing,
+   no external library), `ctx impact`/`context_impact` (MCP)/the Web UI's Impact panel, all
+   sharing one core (`service.impactFor`). Verified against a real call-chain fixture and a real
+   temporary git repo, plus manually against this project's own self-hosted source.
+10. Web UI visual/UX overhaul in progress, per direct user feedback that the V0 slice looked
+    unpolished and the graph view was static (one-shot render, not navigable) — see ADR-0015 once
+    written.
+11. Next up after that: C#/Python extractors (Phase 3b/3c — a drop-in addition per ADR-0011), true
+    per-file incremental indexing, the similarity/duplicate engine (Phase 5, the Web UI's last
+    remaining blocked view), or the global-install/system-service work (Phase 9, requirements
+    already captured) — prioritized by real usage feedback, not by continuing to iterate on ranker
+    constants against one synthetic fixture.

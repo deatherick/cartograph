@@ -145,6 +145,30 @@ func TestHTTPServer_Related(t *testing.T) {
 	}
 }
 
+func TestHTTPServer_Impact(t *testing.T) {
+	srv := setup(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/impact?name=greet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d", res.StatusCode)
+	}
+	var impact service.ImpactResult
+	if err := json.NewDecoder(res.Body).Decode(&impact); err != nil {
+		t.Fatal(err)
+	}
+	if impact.Target.Name != "greet" {
+		t.Fatalf("got target %q, want greet", impact.Target.Name)
+	}
+	if len(impact.DirectCallers) != 1 || impact.DirectCallers[0].Name != "helper" {
+		t.Fatalf("expected helper as greet's direct caller, got %+v", impact.DirectCallers)
+	}
+}
+
 func TestHTTPServer_Source(t *testing.T) {
 	srv := setup(t)
 	defer srv.Close()

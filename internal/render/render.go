@@ -140,3 +140,45 @@ func Related(name string, depth int, related []model.RelatedEntity) string {
 func Stats(s service.Stats) string {
 	return fmt.Sprintf("repo:     %s\nentities: %d\n", s.Repo, s.Entities)
 }
+
+// Impact renders one entity's blast radius: direct callers, the full
+// transitive closure grouped by depth, and which of those are tests.
+func Impact(r service.ImpactResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s\n", r.Target.Kind, r.Target.Qualified)
+	fmt.Fprintf(&b, "  direct callers (%d):\n", len(r.DirectCallers))
+	for _, e := range r.DirectCallers {
+		fmt.Fprintf(&b, "    <- %s %s\n", e.Kind, e.Qualified)
+	}
+	fmt.Fprintf(&b, "  transitive impact (%d total):\n", len(r.Transitive))
+	for _, rel := range r.Transitive {
+		fmt.Fprintf(&b, "    [depth %d] %s %s\n", rel.Depth, rel.Entity.Kind, rel.Entity.Qualified)
+	}
+	fmt.Fprintf(&b, "  tests covering it (%d):\n", len(r.CoveringTests))
+	for _, e := range r.CoveringTests {
+		fmt.Fprintf(&b, "    %s\n", e.Qualified)
+	}
+	return b.String()
+}
+
+// GitDiffImpact renders the aggregated blast radius of every entity a
+// `git diff` touched.
+func GitDiffImpact(r service.GitDiffImpact) string {
+	var b strings.Builder
+	if len(r.ChangedEntities) == 0 {
+		return "no changed entities found in this diff\n"
+	}
+	fmt.Fprintf(&b, "changed entities (%d):\n", len(r.ChangedEntities))
+	for _, e := range r.ChangedEntities {
+		fmt.Fprintf(&b, "  %s %s\n", e.Kind, e.Qualified)
+	}
+	fmt.Fprintf(&b, "impacted (%d, transitive union across every changed entity):\n", len(r.ImpactedEntities))
+	for _, e := range r.ImpactedEntities {
+		fmt.Fprintf(&b, "  %s %s\n", e.Kind, e.Qualified)
+	}
+	fmt.Fprintf(&b, "recommended tests to run (%d):\n", len(r.RecommendedTests))
+	for _, e := range r.RecommendedTests {
+		fmt.Fprintf(&b, "  %s\n", e.Qualified)
+	}
+	return b.String()
+}

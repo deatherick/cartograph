@@ -81,6 +81,8 @@ UI — one index, one graph, one `context` capsule spanning both):
 ./bin/ctx related ~/path/to/some/project SomeClassOrStructName --depth 2
 ./bin/ctx source ~/path/to/some/project someFunctionName
 ./bin/ctx context ~/path/to/some/project "add validation to the order flow" --budget 2500
+./bin/ctx impact ~/path/to/some/project SomeFunctionName   # blast radius: what depends on this
+./bin/ctx impact ~/path/to/some/project --git-diff         # blast radius of your uncommitted changes
 ```
 
 Cartograph indexes its own source this way too — `./bin/ctx index ~/code/cartograph` runs clean

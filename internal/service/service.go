@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/deatherick/cartograph/internal/compile"
+	"github.com/deatherick/cartograph/internal/gitdiff"
 	"github.com/deatherick/cartograph/internal/index"
 	"github.com/deatherick/cartograph/internal/model"
 	"github.com/deatherick/cartograph/internal/srcread"
@@ -159,9 +160,9 @@ func (s *Service) Related(root, repo, name, fileHint string, maxDepth int) ([]mo
 // Phase 1 scope names explicitly (fan_in/fan_out) and that was previously
 // computed but never surfaced through any interface.
 type Inspection struct {
-	Entity  model.Entity
-	FanIn   []model.Edge
-	FanOut  []model.Edge
+	Entity model.Entity
+	FanIn  []model.Edge
+	FanOut []model.Edge
 }
 
 // Inspect returns full detail on the entity named name: its declaration
@@ -255,4 +256,122 @@ func (s *Service) Graph(root, repo string) (Graph, error) {
 		edges = append(edges, snap.FanOut(e.ID)...)
 	}
 	return Graph{Entities: entities, Edges: edges}, nil
+}
+
+// ImpactResult is one entity's blast radius: everything that transitively
+// depends on it (Transitive, via internal/store.Upstream — callers, and
+// their callers, and so on, with no depth limit by default), the subset
+// one hop away (DirectCallers), and which of the transitively-dependent
+// entities are tests (CoveringTests) — the tests worth running after
+// changing Target, found without any dedicated TESTS edge (docs/model.go
+// defines model.EdgeTests but no extractor currently emits it): a Test
+// entity that calls Target, directly or transitively, IS a test covering
+// it, and that is exactly what Upstream's closure already contains.
+type ImpactResult struct {
+	Target        model.Entity
+	DirectCallers []model.Entity
+	Transitive    []model.RelatedEntity
+	CoveringTests []model.Entity
+}
+
+// impactFor computes target's blast radius against an already-open
+// snapshot — the shared core both Impact (by entity name) and
+// ImpactFromGitDiff (by changed file/line ranges) build on, so the two
+// entry points never compute this differently.
+func impactFor(snap *store.Snapshot, target model.Entity, maxDepth int) ImpactResult {
+	upstream := snap.Upstream(target.ID, maxDepth)
+	result := ImpactResult{Target: target, Transitive: upstream}
+	for _, r := range upstream {
+		if r.Depth == 1 {
+			result.DirectCallers = append(result.DirectCallers, r.Entity)
+		}
+		if r.Entity.Kind == model.KindTest {
+			result.CoveringTests = append(result.CoveringTests, r.Entity)
+		}
+	}
+	return result
+}
+
+// Impact computes the entity named name's blast radius: every entity that
+// transitively depends on it, and which of those are tests. maxDepth<=0
+// means the full transitive closure (see store.Upstream's doc for why
+// that's impact analysis's natural default, unlike Related's interactive
+// default of 2 hops).
+func (s *Service) Impact(root, repo, name, fileHint string, maxDepth int) (ImpactResult, error) {
+	snap, err := s.open(root, repo)
+	if err != nil {
+		return ImpactResult{}, err
+	}
+	match, err := findUnique(snap, name, fileHint)
+	if err != nil {
+		return ImpactResult{}, err
+	}
+	return impactFor(snap, match, maxDepth), nil
+}
+
+// GitDiffImpact is what changed (per internal/gitdiff's line-range
+// mapping) and everything that change transitively affects, aggregated
+// across every directly-changed entity.
+type GitDiffImpact struct {
+	ChangedEntities  []model.Entity
+	ImpactedEntities []model.Entity // union of every changed entity's Transitive closure, deduplicated
+	RecommendedTests []model.Entity // union of every changed entity's CoveringTests, deduplicated
+}
+
+// ImpactFromGitDiff runs `git diff --unified=0 <gitRef>` against root
+// (gitRef defaults to "HEAD" — working tree vs the last commit — when
+// empty), maps the changed line ranges to entities whose Anchor overlaps
+// them, and unions each changed entity's blast radius. This is Phase 4's
+// git-diff-driven mode (docs/MVP.md: "ctx impact --git-diff [ref]") — the
+// same impactFor core Impact uses, just seeded from a diff instead of one
+// named entity.
+func (s *Service) ImpactFromGitDiff(root, repo, gitRef string, maxDepth int) (GitDiffImpact, error) {
+	snap, err := s.open(root, repo)
+	if err != nil {
+		return GitDiffImpact{}, err
+	}
+	if gitRef == "" {
+		gitRef = "HEAD"
+	}
+	diffOutput, err := gitdiff.Diff(root, gitRef)
+	if err != nil {
+		return GitDiffImpact{}, err
+	}
+	changedRanges := gitdiff.ParseChangedRanges(diffOutput)
+
+	seenChanged := map[model.EntityID]bool{}
+	seenImpacted := map[model.EntityID]bool{}
+	seenTests := map[model.EntityID]bool{}
+	var out GitDiffImpact
+
+	for _, e := range snap.All() {
+		ranges, ok := changedRanges[e.Anchor.File]
+		if !ok {
+			continue
+		}
+		for _, r := range ranges {
+			if !r.Overlaps(e.Anchor.StartLine, e.Anchor.EndLine) {
+				continue
+			}
+			if !seenChanged[e.ID] {
+				seenChanged[e.ID] = true
+				out.ChangedEntities = append(out.ChangedEntities, e)
+			}
+			res := impactFor(snap, e, maxDepth)
+			for _, rel := range res.Transitive {
+				if !seenImpacted[rel.Entity.ID] {
+					seenImpacted[rel.Entity.ID] = true
+					out.ImpactedEntities = append(out.ImpactedEntities, rel.Entity)
+				}
+			}
+			for _, test := range res.CoveringTests {
+				if !seenTests[test.ID] {
+					seenTests[test.ID] = true
+					out.RecommendedTests = append(out.RecommendedTests, test)
+				}
+			}
+			break // one overlapping range is enough to flag this entity as changed
+		}
+	}
+	return out, nil
 }

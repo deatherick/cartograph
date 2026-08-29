@@ -74,6 +74,14 @@ func New(svc *service.Service) *mcp.Server {
 		Description: "The exact source lines an entity spans, read from the working tree.",
 	}, sourceHandler(svc))
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "context_impact",
+		Description: "Blast radius: every entity that transitively depends on a named entity (or, " +
+			"if git_diff is set, on every entity a `git diff` touched), plus which of those are " +
+			"tests worth running. Pass name for a single entity, or git_diff (a ref, default HEAD) " +
+			"to analyze uncommitted/recent changes instead.",
+	}, impactHandler(svc))
+
 	return server
 }
 
@@ -207,5 +215,39 @@ func sourceHandler(svc *service.Service) mcp.ToolHandlerFor[sourceArgs, sourceRe
 			return errorResult[sourceResult](err)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Source(e, src)}}}, sourceResult{Entity: e, Source: src}, nil
+	}
+}
+
+type impactArgs struct {
+	Root    string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Name    string `json:"name,omitempty" jsonschema:"bare name of the entity to analyze; omit when using git_diff instead"`
+	File    string `json:"file,omitempty" jsonschema:"substring to disambiguate when name matches entities in more than one file"`
+	GitDiff string `json:"git_diff,omitempty" jsonschema:"analyze every entity a git diff touched instead of one named entity; the ref to diff against (default HEAD) — pass \"HEAD\" explicitly, or e.g. \"HEAD~3\", to select this mode"`
+	Depth   int    `json:"depth,omitempty" jsonschema:"max hops to traverse (default: unlimited — the full transitive closure)"`
+}
+
+// impactResult wraps whichever of the two result shapes applies — see
+// findResult's doc for why every handler here returns a named struct,
+// never a bare slice/union. Exactly one of Impact/GitDiffImpact is set,
+// matching which mode impactHandler ran.
+type impactResult struct {
+	Impact        *service.ImpactResult  `json:"impact,omitempty"`
+	GitDiffImpact *service.GitDiffImpact `json:"gitDiffImpact,omitempty"`
+}
+
+func impactHandler(svc *service.Service) mcp.ToolHandlerFor[impactArgs, impactResult] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args impactArgs) (*mcp.CallToolResult, impactResult, error) {
+		if args.Name == "" {
+			result, err := svc.ImpactFromGitDiff(args.Root, service.RepoName(args.Root), args.GitDiff, args.Depth)
+			if err != nil {
+				return errorResult[impactResult](err)
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.GitDiffImpact(result)}}}, impactResult{GitDiffImpact: &result}, nil
+		}
+		result, err := svc.Impact(args.Root, service.RepoName(args.Root), args.Name, args.File, args.Depth)
+		if err != nil {
+			return errorResult[impactResult](err)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Impact(result)}}}, impactResult{Impact: &result}, nil
 	}
 }

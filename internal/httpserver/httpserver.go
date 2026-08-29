@@ -123,6 +123,35 @@ func New(svc *service.Service, root, repo string) http.Handler {
 		writeJSON(w, related)
 	})
 
+	mux.HandleFunc("/api/impact", func(w http.ResponseWriter, r *http.Request) {
+		depth := 0 // full transitive closure by default
+		if v := r.URL.Query().Get("depth"); v != "" {
+			if d, perr := strconv.Atoi(v); perr == nil {
+				depth = d
+			}
+		}
+		if gitRef, ok := r.URL.Query()["gitDiff"]; ok {
+			result, err := svc.ImpactFromGitDiff(root, repo, gitRef[0], depth)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, result)
+			return
+		}
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "missing ?name= (or ?gitDiff=<ref>)", http.StatusBadRequest)
+			return
+		}
+		result, err := svc.Impact(root, repo, name, r.URL.Query().Get("file"), depth)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, result)
+	})
+
 	mux.HandleFunc("/api/source", func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Query().Get("name")
 		if name == "" {

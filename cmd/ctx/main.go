@@ -51,6 +51,8 @@ func main() {
 		err = runSource(svc, os.Args[2:])
 	case "stats":
 		err = runStats(svc, os.Args[2:])
+	case "impact":
+		err = runImpact(svc, os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -74,6 +76,8 @@ Usage:
   ctx related <path> <name> [--depth N]   entities within N hops (reads snapshot)
   ctx source <path> <name>      print the entity's source lines
   ctx stats <path>              print snapshot summary (reads snapshot)
+  ctx impact <path> <name> [--depth N] [--file <substring>]   blast radius: what depends on this
+  ctx impact <path> --git-diff [ref]   blast radius of every entity a git diff touched (default: HEAD)
 
 find/related/stats read the snapshot persisted by the last `+"`ctx index`"+` run — they
 do not re-index. Run `+"`ctx index <path>`"+` first, and again after the source changes.`)
@@ -364,4 +368,65 @@ func runStats(svc *service.Service, args []string) error {
 	}
 	fmt.Print(render.Stats(stats))
 	return nil
+}
+
+func runImpact(svc *service.Service, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf(`usage: ctx impact <path> <name> [--depth N] [--file <substring>]
+   or: ctx impact <path> --git-diff [ref]   (ref defaults to HEAD)`)
+	}
+	root := args[0]
+	depth := 0 // full transitive closure by default — see service.Impact's doc
+	if v := flagValue(args, "--depth"); v != "" {
+		if d, perr := strconv.Atoi(v); perr == nil {
+			depth = d
+		}
+	}
+
+	if hasFlag(args, "--git-diff") {
+		ref := optionalFlagValue(args, "--git-diff") // "" defaults to HEAD inside the service layer
+		result, err := svc.ImpactFromGitDiff(root, service.RepoName(root), ref, depth)
+		if err != nil {
+			return err
+		}
+		fmt.Print(render.GitDiffImpact(result))
+		return nil
+	}
+
+	if len(args) < 2 {
+		return fmt.Errorf("usage: ctx impact <path> <name> [--depth N] [--file <substring>]")
+	}
+	name := args[1]
+	result, err := svc.Impact(root, service.RepoName(root), name, flagValue(args, "--file"), depth)
+	if err != nil {
+		return err
+	}
+	fmt.Print(render.Impact(result))
+	return nil
+}
+
+// hasFlag reports whether flag is present in args at all — for boolean
+// flags like --git-diff, which may or may not carry a following value
+// (a ref) depending on whether the caller wants the default (HEAD).
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+// optionalFlagValue is flagValue's counterpart for a flag whose value is
+// itself optional (--git-diff [ref]): the following arg is only treated
+// as the value if it doesn't itself look like another flag — otherwise
+// `ctx impact <path> --git-diff --depth 2` would wrongly consume
+// "--depth" as the git ref.
+func optionalFlagValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+			return args[i+1]
+		}
+	}
+	return ""
 }

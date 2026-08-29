@@ -262,3 +262,48 @@ func (s *Snapshot) Related(start model.EntityID, maxDepth int) []model.RelatedEn
 	return out
 }
 
+// Upstream does a depth-limited BFS following ONLY incoming edges — the
+// transitive set of everything that (directly or indirectly) depends on
+// start. This is impact analysis's actual traversal direction
+// (internal/service.Impact, Phase 4): Related answers "what's near this
+// entity" (both directions, depth 2 by default, tuned for interactive
+// exploration); Upstream answers "what breaks if I change this entity" —
+// callers, and their callers, and so on.
+//
+// maxDepth<=0 means UNLIMITED depth (the full transitive closure), unlike
+// Related's default of 2 — a real blast radius should not silently stop
+// at an arbitrary distance. Safe against cycles via the same visited-set
+// BFS every traversal in this file already uses.
+func (s *Snapshot) Upstream(start model.EntityID, maxDepth int) []model.RelatedEntity {
+	unlimited := maxDepth <= 0
+	visited := map[model.EntityID]bool{start: true}
+	var out []model.RelatedEntity
+
+	type frontierItem struct {
+		id    model.EntityID
+		depth int
+	}
+	frontier := []frontierItem{{start, 0}}
+
+	for len(frontier) > 0 {
+		cur := frontier[0]
+		frontier = frontier[1:]
+		if !unlimited && cur.depth >= maxDepth {
+			continue
+		}
+		for _, edge := range s.FanIn(cur.id) {
+			next := edge.Src
+			if next == "" || visited[next] {
+				continue
+			}
+			visited[next] = true
+			ent, ok := s.Lookup(next)
+			if !ok {
+				continue
+			}
+			out = append(out, model.RelatedEntity{Entity: ent, Depth: cur.depth + 1, Via: edge})
+			frontier = append(frontier, frontierItem{next, cur.depth + 1})
+		}
+	}
+	return out
+}

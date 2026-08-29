@@ -99,6 +99,7 @@ async function showEntity(name, fileHint) {
   document.getElementById('insp-source').hidden = true;
   document.getElementById('insp-source').textContent = '';
   document.getElementById('graph-wrap').hidden = true;
+  document.getElementById('impact-wrap').hidden = true;
 
   const fillEdges = (listId, edges, endpointKey) => {
     const ul = document.getElementById(listId);
@@ -131,6 +132,41 @@ async function showEntity(name, fileHint) {
     const related = await getJSON(`/api/related?name=${encodeURIComponent(insp.Entity.Name)}&file=${encodeURIComponent(insp.Entity.Anchor.File)}&depth=2`);
     document.getElementById('graph-wrap').hidden = false;
     drawGraph(insp.Entity, related);
+  };
+
+  document.getElementById('btn-impact').onclick = async () => {
+    const impact = await getJSON(`/api/impact?name=${encodeURIComponent(insp.Entity.Name)}&file=${encodeURIComponent(insp.Entity.Anchor.File)}`);
+    document.getElementById('impact-wrap').hidden = false;
+    document.getElementById('impact-summary').textContent =
+      `${impact.DirectCallers ? impact.DirectCallers.length : 0} direct caller(s) · ${impact.Transitive ? impact.Transitive.length : 0} total in the blast radius`;
+
+    const list = document.getElementById('impact-list');
+    list.innerHTML = '';
+    if (!impact.Transitive || impact.Transitive.length === 0) {
+      list.appendChild(el('li', 'muted', '(nothing depends on this — safe to change in isolation)'));
+    } else {
+      for (const r of impact.Transitive) {
+        const li = el('li');
+        li.appendChild(el('span', 'kind-tag', `depth ${r.Depth}`));
+        li.appendChild(document.createTextNode(`${r.Entity.Kind} ${r.Entity.Name}`));
+        li.onclick = () => showEntity(r.Entity.Name, r.Entity.Anchor.File);
+        list.appendChild(li);
+      }
+    }
+
+    const testsUl = document.getElementById('impact-tests');
+    testsUl.innerHTML = '';
+    const tests = impact.CoveringTests || [];
+    document.getElementById('impact-tests-h').textContent = `Tests covering it (${tests.length})`;
+    if (tests.length === 0) {
+      testsUl.appendChild(el('li', 'muted', '(none found)'));
+    } else {
+      for (const test of tests) {
+        const li = el('li', null, test.Name);
+        li.onclick = () => showEntity(test.Name, test.Anchor.File);
+        testsUl.appendChild(li);
+      }
+    }
   };
 }
 

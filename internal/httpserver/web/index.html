@@ -33,6 +33,14 @@
       <div class="actions">
         <button id="btn-source">View source</button>
         <button id="btn-graph">View graph (depth 2)</button>
+        <button id="btn-impact">Impact analysis</button>
+      </div>
+      <div id="impact-wrap" hidden>
+        <h2>Impact <span class="muted">(what depends on this, transitively)</span></h2>
+        <div id="impact-summary" class="muted"></div>
+        <ul id="impact-list" class="edge-list"></ul>
+        <h2 id="impact-tests-h">Tests covering it</h2>
+        <ul id="impact-tests" class="edge-list"></ul>
       </div>
       <pre id="insp-source" hidden></pre>
       <div class="cols">
