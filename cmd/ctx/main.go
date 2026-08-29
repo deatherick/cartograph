@@ -9,12 +9,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/deatherick/cartograph/internal/index"
 	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
 )
@@ -29,6 +33,10 @@ func main() {
 
 	var err error
 	switch os.Args[1] {
+	case "init":
+		err = runInit(os.Args[2:])
+	case "languages":
+		err = runLanguages(os.Args[2:])
 	case "index":
 		err = runIndex(svc, os.Args[2:])
 	case "context":
@@ -54,9 +62,11 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `ctx — local code context engine (Phase 1: static map only)
+	fmt.Fprintln(os.Stderr, `ctx — local code context engine
 
 Usage:
+  ctx init <path> [--yes] [--languages a,b]   wizard: detect languages, write .cartograph.json
+  ctx languages <path>           show which languages are detected/enabled for this repo
   ctx index <path>              index a repo, persist a snapshot, print run stats
   ctx context <path> "<task>" --budget N [--session ID]   compile a token-budgeted capsule
   ctx find <path> <name>        find every entity with this bare name (reads snapshot)
@@ -79,6 +89,172 @@ func flagValue(args []string, flag string) string {
 		}
 	}
 	return ""
+}
+
+// runInit is the project-setup wizard: detect which languages this repo
+// uses, let the user confirm or customize the list, and persist the
+// choice to .cartograph.json (internal/index.ConfigFileName) — editable
+// by hand afterward, or by re-running this wizard. Every language is
+// opt-in/opt-out independently (internal/index.Language), so a user who
+// doesn't want a language's detection active can exclude it here (a
+// lighter, faster index), and one who wants everything enabled can pass
+// --languages with every known name.
+func runInit(args []string) error {
+	fs := struct {
+		yes       bool
+		languages string
+		path      string
+	}{path: "."}
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--yes", "-y":
+			fs.yes = true
+		case "--languages":
+			if i+1 < len(args) {
+				fs.languages = args[i+1]
+				i++
+			}
+		default:
+			positional = append(positional, args[i])
+		}
+	}
+	if len(positional) > 0 {
+		fs.path = positional[0]
+	}
+	root := fs.path
+
+	if _, ok := index.LoadConfig(root); ok {
+		fmt.Printf("%s already exists at %s.\n", index.ConfigFileName, root)
+		if !fs.yes && isInteractiveStdin() {
+			fmt.Print("Reconfigure? [y/N]: ")
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
+				fmt.Println("Left unchanged.")
+				return nil
+			}
+		} else if !fs.yes {
+			fmt.Println("Non-interactive and no --yes given — leaving it unchanged. Pass --yes to reconfigure anyway.")
+			return nil
+		}
+	}
+
+	available := index.AvailableLanguages(root)
+
+	var chosen []string
+	switch {
+	case fs.languages != "":
+		for _, name := range strings.Split(fs.languages, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				chosen = append(chosen, name)
+			}
+		}
+	case fs.yes || !isInteractiveStdin():
+		for _, l := range available {
+			if l.Detected {
+				chosen = append(chosen, l.Name)
+			}
+		}
+		if !fs.yes {
+			fmt.Println("Non-interactive terminal — enabling every detected language without prompting (pass --yes to silence this note, or --languages to choose explicitly).")
+		}
+	default:
+		fmt.Println("Detected languages for", root+":")
+		for _, l := range available {
+			mark := " "
+			if l.Detected {
+				mark = "x"
+			}
+			fmt.Printf("  [%s] %s\n", mark, l.Name)
+		}
+		fmt.Print("Enable all detected languages? [Y/n], or type comma-separated names to customize: ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		line = strings.TrimSpace(line)
+		switch strings.ToLower(line) {
+		case "", "y", "yes":
+			for _, l := range available {
+				if l.Detected {
+					chosen = append(chosen, l.Name)
+				}
+			}
+		case "n", "no":
+			fmt.Println("No languages enabled — edit .cartograph.json by hand, or re-run `ctx init --languages a,b` later.")
+		default:
+			for _, name := range strings.Split(line, ",") {
+				if name = strings.TrimSpace(name); name != "" {
+					chosen = append(chosen, name)
+				}
+			}
+		}
+	}
+
+	sort.Strings(chosen)
+	if err := index.SaveConfig(root, index.Config{Languages: chosen}); err != nil {
+		return err
+	}
+	if len(chosen) == 0 {
+		fmt.Printf("Wrote %s with no languages enabled — `ctx index` will index nothing until you edit it.\n", index.ConfigFileName)
+	} else {
+		fmt.Printf("Wrote %s — enabled: %s\n", index.ConfigFileName, strings.Join(chosen, ", "))
+	}
+	fmt.Println("Edit this file by hand anytime, or re-run `ctx init` to redo this wizard.")
+	return nil
+}
+
+func runLanguages(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: ctx languages <path>")
+	}
+	root := args[0]
+	cfg, hasConfig := index.LoadConfig(root)
+	available := index.AvailableLanguages(root)
+
+	enabledSet := map[string]bool{}
+	if hasConfig && len(cfg.Languages) > 0 {
+		for _, n := range cfg.Languages {
+			enabledSet[n] = true
+		}
+	} else {
+		for _, l := range available {
+			if l.Detected {
+				enabledSet[l.Name] = true
+			}
+		}
+	}
+
+	if hasConfig {
+		fmt.Printf("%s found at %s:\n", index.ConfigFileName, root)
+	} else {
+		fmt.Printf("No %s at %s — showing the zero-config default (every detected language):\n", index.ConfigFileName, root)
+	}
+	for _, l := range available {
+		status := "disabled"
+		if enabledSet[l.Name] {
+			status = "enabled"
+		}
+		detected := "not detected"
+		if l.Detected {
+			detected = "detected"
+		}
+		fmt.Printf("  %-12s %-9s (%s)\n", l.Name, status, detected)
+	}
+	if !hasConfig {
+		fmt.Println("\nRun `ctx init` to persist this choice, or to customize it.")
+	}
+	return nil
+}
+
+// isInteractiveStdin reports whether stdin looks like a real terminal, not
+// a pipe/redirect — used to decide whether runInit may prompt at all. A
+// coding agent or CI script invoking `ctx init` never gets stuck waiting
+// on input it cannot supply; it silently gets the zero-config default
+// instead (loudly logged to stdout, never truly silent).
+func isInteractiveStdin() bool {
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
 }
 
 func runIndex(svc *service.Service, args []string) error {

@@ -18,8 +18,6 @@ import (
 	"github.com/deatherick/cartograph/internal/graph"
 	"github.com/deatherick/cartograph/internal/model"
 	"github.com/deatherick/cartograph/internal/parser"
-	"github.com/deatherick/cartograph/internal/parser/golang"
-	"github.com/deatherick/cartograph/internal/parser/ts"
 	"github.com/deatherick/cartograph/internal/resolve"
 )
 
@@ -60,37 +58,32 @@ type Result struct {
 	Stats Stats
 }
 
-// extractors maps a file extension to the extractor that handles it.
-// Adding csharp/python (Phase 3, still to come) is one entry each, not a
-// rewrite — Go's own addition here is the proof of that claim.
-func extractors() map[string]parser.Extractor {
-	m := map[string]parser.Extractor{}
-	tsExt := ts.New()
-	for _, ext := range tsExt.Extensions() {
-		m[ext] = tsExt
-	}
-	goExt := golang.New()
-	for _, ext := range goExt.Extensions() {
-		m[ext] = goExt
-	}
-	return m
-}
-
-// Run walks root, extracts every recognized file, resolves every ref
-// repo-wide, and returns the built graph plus run statistics. repo is the
-// identity namespace entities are scoped to (see docs/adr/0003-data-model.md)
-// — typically the repo's directory name, but callers may pass anything
-// stable.
+// Run walks root, extracts every recognized file using whichever
+// languages are enabled (see enabledLanguages — every detected language by
+// default, or exactly what .cartograph.json names, editable via `ctx
+// init` or by hand), resolves every ref repo-wide, and returns the built
+// graph plus run statistics. repo is the identity namespace entities are
+// scoped to (see docs/adr/0003-data-model.md) — typically the repo's
+// directory name, but callers may pass anything stable.
 func Run(ctx context.Context, root, repo string) (*Result, error) {
 	start := time.Now()
-	exts := extractors()
+	langs := enabledLanguages(root)
+
+	exts := map[string]parser.Extractor{}
+	resolverIdx := resolve.NewIndex(repo)
+	for _, l := range langs {
+		for _, ext := range l.Extractor.Extensions() {
+			exts[ext] = l.Extractor
+		}
+		resolverIdx.RegisterPolicy(l.Policy)
+	}
 
 	var allFacts []*model.FileFacts
 	err := exclude.WalkSource(root, func(path string, content []byte) error {
 		ext := filepath.Ext(path)
 		extractor, ok := exts[ext]
 		if !ok {
-			return nil // not a recognized source file; skip silently
+			return nil // not a recognized source file, or its language is disabled; skip silently
 		}
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
@@ -117,13 +110,6 @@ func Run(ctx context.Context, root, repo string) (*Result, error) {
 		return nil, fmt.Errorf("index: walking %s: %w", root, err)
 	}
 
-	resolverIdx := resolve.NewIndex(repo)
-	if cfg, ok := loadTSConfig(root); ok {
-		resolverIdx.SetTSConfig(cfg)
-	}
-	if modulePath, ok := loadGoModule(root); ok {
-		resolverIdx.SetGoModule(modulePath)
-	}
 	for _, f := range allFacts {
 		resolverIdx.AddFile(f)
 	}

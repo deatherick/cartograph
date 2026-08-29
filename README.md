@@ -67,7 +67,9 @@ Class      src/services/userService.ts#UserService  src/services/userService.ts:
 Test       tests/userService.test.ts#UserService    tests/userService.test.ts:5-29
 ```
 
-Now point it at a real repo instead — TypeScript or Go, same commands either way:
+Now point it at a real repo instead — TypeScript, Go, or a mix of both in the same repo, same
+commands either way (a Java Spring service and its TypeScript frontend, a Go backend with a React
+UI — one index, one graph, one `context` capsule spanning both):
 
 ```bash
 ./bin/ctx index ~/path/to/some/project
@@ -79,6 +81,24 @@ Now point it at a real repo instead — TypeScript or Go, same commands either w
 
 Cartograph indexes its own source this way too — `./bin/ctx index ~/code/cartograph` runs clean
 at 0.1% bug_rate ([ADR-0010](docs/adr/0010-go-extractor-and-self-hosting.md)).
+
+### Choosing which languages run: `ctx init`
+
+Every language is opt-in/opt-out per project, not a fixed set — a language you don't want costs
+nothing at index time (it's never even parsed), and languages are architecturally decoupled from
+each other ([ADR-0011](docs/adr/0011-plugin-language-architecture.md)): adding one never touches
+another's code.
+
+```bash
+./bin/ctx init ~/path/to/some/project        # wizard: detects languages, asks to confirm, writes .cartograph.json
+./bin/ctx init ~/path/to/some/project --yes   # skip prompts, enable everything detected
+./bin/ctx init ~/path/to/some/project --languages go,typescript   # skip detection entirely
+./bin/ctx languages ~/path/to/some/project    # show what's enabled/detected without changing anything
+```
+
+`init` is optional — with no `.cartograph.json` present, `ctx index` already enables every
+language it detects. Running `init` (or hand-editing `.cartograph.json`, a plain, git-committable
+JSON file — `{"languages": ["go"]}`) is how you narrow that, and how you change it again later.
 
 `context` is the Context Compiler — the actual point of this project: instead of a bare entity
 lookup, it ranks everything relevant to the task description and returns a token-budgeted
@@ -141,8 +161,8 @@ The honest list, kept current in [`docs/MVP.md`](docs/MVP.md#consolidated-known-
 - `docs/adr/` — architecture decision records, one per real design decision made, in the order
   they were made — the fastest way to understand *why* something works the way it does
 - `docs/research/` — discovery notes from studying Grafel (MIT-licensed, studied as a reference,
-  no code copied — see [ADR-0002](docs/adr/0002-grafel-reuse-protocol.md)) and an 85-entry
-  edge-case backlog derived from it
+  no code copied — see [ADR-0002](docs/adr/0002-grafel-reuse-protocol.md)) and a 90+-entry
+  edge-case backlog derived from it (plus this project's own, e.g. Go's edge cases, J1-J7)
 - `docs/benchmarks/` — frozen `ctxbench` results per phase, so token-savings claims are always
   checked against a prior recorded run, not just today's
 - `docs/requirements/` — user-facing requirements captured ahead of the phase that implements them

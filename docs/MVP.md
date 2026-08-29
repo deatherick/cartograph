@@ -15,7 +15,8 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 1 — TypeScript static map | ✅ Done (ADR-0004/0005/0006) |
 | 2 — Context Compiler + MCP | ✅ Done — Context Compiler (ADR-0007), MCP server (ADR-0008), live agent demo (ADR-0009), README quickstart. **MVP shipped.** |
 | 3a — Go extractor + self-hosting | ✅ Done (ADR-0010) — 0.1% bug_rate indexing this project's own real Go source |
-| 3b/3c — C#, Python extractors | ⬜ Post-MVP |
+| 3a′ — Plug-and-play language architecture, init wizard | ✅ Done (ADR-0011) — `LanguagePolicy` interface, `.cartograph.json`, `ctx init`/`ctx languages` |
+| 3b/3c — C#, Python extractors | ⬜ Post-MVP (now a drop-in addition per ADR-0011, not a core rewrite) |
 | 3d — Daemon, incremental indexing, file watcher | ⬜ Post-MVP |
 | 4-9 — Impact analysis, duplicates, Web UI, cross-repo, AI, hardening | ⬜ Post-MVP |
 
@@ -101,6 +102,19 @@ rediscover this later" list.
 - tsconfig path aliases only support single-wildcard patterns (`"@/*": ["src/*"]`) — multi-segment
   or regex-like patterns are unsupported.
 
+### Language plugin architecture (`internal/resolve`, `internal/index`) — ADR-0011
+- "Plug and play" means architecturally decoupled and independently addable at the source level
+  (one `LanguagePolicy` file per language, registered in one list) — NOT a runtime-loadable
+  plugin mechanism (dynamic `.so`/RPC plugins). Every language still ships compiled into the
+  `ctx` binary. Deliberately out of scope until a real need appears.
+- `.cartograph.json` has no schema versioning or unknown-field preservation — a hand-edited typo
+  in `languages` is silently ignored (falls out of `enabledLanguages`'s name-matching), not
+  rejected with an error. Acceptable today (one field, low stakes); revisit once the file grows.
+- `ctx init`'s non-interactive-stdin detection (`isInteractiveStdin`) is a heuristic
+  (`os.Stdin`'s `ModeCharDevice` bit) — could misfire in an unusual terminal emulator; the
+  fallback behavior (enable every detected language, logged loudly) is always safe even if the
+  heuristic is wrong, so this has not needed a fix.
+
 ### Extraction and resolution (`internal/parser/golang`) — ADR-0010
 Measured at 0.1% bug_rate self-hosting on this project's own real Go source (54 files, 393
 entities, 1,916 dispositions) — these are the documented gaps behind that number, not blockers:
@@ -184,6 +198,12 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
    project's own real source, `ctx find`/`inspect`/`related`/`context` all verified working
    against it, including a cross-language `context` capsule (Go + TypeScript results together for
    one task).
-5. Next up, per the deferred list above: C#/Python extractors (Phase 3b/3c), then the daemon +
-   incremental indexing + file watcher (Phase 3d) — prioritized by real usage feedback, not by
-   continuing to iterate on ranker constants against one synthetic fixture.
+5. ~~Plug-and-play language architecture~~ — done, ADR-0011: `LanguagePolicy` interface (no
+   per-language branching in `internal/resolve`'s core pipeline, verified by a dedicated
+   architecture test), `.cartograph.json` for opt-in/opt-out language selection, and `ctx
+   init`/`ctx languages` as the wizard/status commands. Verified a disabled language is never
+   even walked, not merely filtered from output.
+6. Next up, per the deferred list above: C#/Python extractors (Phase 3b/3c — now a drop-in
+   addition, not a core rewrite), then the daemon + incremental indexing + file watcher
+   (Phase 3d) — prioritized by real usage feedback, not by continuing to iterate on ranker
+   constants against one synthetic fixture.

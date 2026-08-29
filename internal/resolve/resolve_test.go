@@ -1,27 +1,62 @@
 package resolve
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/deatherick/cartograph/internal/model"
 )
 
+// TestArchitectureBoundary_CoreNeverBranchesOnLang enforces the "plug and
+// play, no bidirectional dependency between languages" design resolve.go's
+// package doc claims: the core pipeline file must never mention a specific
+// model.Lang value by name. Every per-language decision belongs in that
+// language's own lang_*.go file (lang_ts.go, lang_go.go), reached only
+// through the LanguagePolicy interface — this is a textual check, matching
+// exactly the kind of grep internal/parser/architecture_test.go already
+// uses for its own boundary (no tree-sitter type outside internal/parser).
+func TestArchitectureBoundary_CoreNeverBranchesOnLang(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(".", "resolve.go"))
+	if err != nil {
+		t.Fatalf("reading resolve.go: %v", err)
+	}
+	for _, needle := range []string{"model.LangTS", "model.LangGo"} {
+		if strings.Contains(string(content), needle) {
+			t.Errorf("resolve.go (the core pipeline) mentions %q directly — per-language logic belongs in a lang_*.go file, reached only through LanguagePolicy", needle)
+		}
+	}
+}
+
 func entity(kind model.Kind, qualified, name string) model.Entity {
 	const repo = "repo"
 	return model.Entity{
 		ID:        model.NewEntityID(repo, kind, qualified, ""),
 		Kind:      kind,
+		Lang:      model.LangTS,
 		Repo:      repo,
 		Qualified: qualified,
 		Name:      name,
 	}
 }
 
-func TestResolve_SameFile(t *testing.T) {
+// tsIndex builds a resolver Index with the TypeScript policy registered —
+// every test below exercises TS-specific tiers, which (per langpolicy.go's
+// "plug and play" design) only fire when a language is explicitly
+// registered, exactly as a real caller (internal/index) must do.
+func tsIndex() *Index {
 	idx := NewIndex("repo")
+	idx.RegisterPolicy(NewTSPolicy(TSConfig{}))
+	return idx
+}
+
+func TestResolve_SameFile(t *testing.T) {
+	idx := tsIndex()
 	fn := entity(model.KindFunction, "a.ts#helper", "helper")
 	facts := &model.FileFacts{
+		Lang:     model.LangTS,
 		File:     "a.ts",
 		Entities: []model.Entity{fn},
 		Refs: []model.Ref{
@@ -46,12 +81,13 @@ func TestResolve_SameFile(t *testing.T) {
 }
 
 func TestResolve_ImportTable(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 
 	repoEntity := entity(model.KindClass, "repositories/userRepository.ts#UserRepository", "UserRepository")
-	repoFacts := &model.FileFacts{File: "repositories/userRepository.ts", Entities: []model.Entity{repoEntity}}
+	repoFacts := &model.FileFacts{Lang: model.LangTS, File: "repositories/userRepository.ts", Entities: []model.Entity{repoEntity}}
 
 	svcFacts := &model.FileFacts{
+		Lang: model.LangTS,
 		File: "services/userService.ts",
 		Imports: []model.ImportBinding{
 			{LocalName: "UserRepository", Source: "../repositories/userRepository", ImportedName: "UserRepository"},
@@ -80,8 +116,9 @@ func TestResolve_ImportTable(t *testing.T) {
 }
 
 func TestResolve_DanglingRepoRelativeImport_IsBugExtractor(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	facts := &model.FileFacts{
+		Lang:    model.LangTS,
 		File:    "services/userService.ts",
 		Imports: []model.ImportBinding{{LocalName: "Missing", Source: "../does/not/exist", ImportedName: "Missing"}},
 		Refs: []model.Ref{
@@ -99,8 +136,9 @@ func TestResolve_DanglingRepoRelativeImport_IsBugExtractor(t *testing.T) {
 }
 
 func TestResolve_KnownExternalPackage_IsNotABug(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	facts := &model.FileFacts{
+		Lang:    model.LangTS,
 		File:    "app.ts",
 		Imports: []model.ImportBinding{{LocalName: "express", Source: "express", IsDefault: true}},
 		Refs: []model.Ref{
@@ -118,8 +156,9 @@ func TestResolve_KnownExternalPackage_IsNotABug(t *testing.T) {
 }
 
 func TestResolve_KnownGlobal_IsNotABug(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	facts := &model.FileFacts{
+		Lang: model.LangTS,
 		File: "app.ts",
 		Refs: []model.Ref{
 			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "console"}},
@@ -133,15 +172,16 @@ func TestResolve_KnownGlobal_IsNotABug(t *testing.T) {
 }
 
 func TestResolve_GenericBareNameWithCandidates_IsAmbiguousNotAutoResolved(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	getterA := entity(model.KindFunction, "a.ts#get", "get")
 	facts := &model.FileFacts{
-		File:     "b.ts",
+		Lang: model.LangTS,
+		File: "b.ts",
 		Refs: []model.Ref{
 			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "get"}},
 		},
 	}
-	otherFacts := &model.FileFacts{File: "a.ts", Entities: []model.Entity{getterA}}
+	otherFacts := &model.FileFacts{Lang: model.LangTS, File: "a.ts", Entities: []model.Entity{getterA}}
 	idx.AddFile(otherFacts)
 	idx.AddFile(facts)
 
@@ -162,8 +202,9 @@ func TestResolve_GenericBareNameWithCandidates_IsAmbiguousNotAutoResolved(t *tes
 }
 
 func TestResolve_QualifiedThroughLocalVar_IsUnimplementedNotABug(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	facts := &model.FileFacts{
+		Lang: model.LangTS,
 		File: "svc.ts",
 		Refs: []model.Ref{
 			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "repo", Member: "findByEmail"}},
@@ -180,12 +221,13 @@ func TestResolve_QualifiedThroughLocalVar_IsUnimplementedNotABug(t *testing.T) {
 }
 
 func TestResolve_ReceiverType_SameFile(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	svc := entity(model.KindClass, "svc.ts#UserService", "UserService")
 	method := entity(model.KindMethod, "svc.ts#UserService.register", "register")
 	caller := entity(model.KindMethod, "svc.ts#Caller.run", "run")
 
 	facts := &model.FileFacts{
+		Lang:     model.LangTS,
 		File:     "svc.ts",
 		Entities: []model.Entity{svc, method, caller},
 		Refs: []model.Ref{
@@ -212,12 +254,13 @@ func TestResolve_ReceiverType_SameFile(t *testing.T) {
 }
 
 func TestResolve_ReceiverType_CrossFileViaImport(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	repoClass := entity(model.KindClass, "repositories/userRepository.ts#UserRepository", "UserRepository")
 	repoMethod := entity(model.KindMethod, "repositories/userRepository.ts#UserRepository.findByEmail", "findByEmail")
-	repoFacts := &model.FileFacts{File: "repositories/userRepository.ts", Entities: []model.Entity{repoClass, repoMethod}}
+	repoFacts := &model.FileFacts{Lang: model.LangTS, File: "repositories/userRepository.ts", Entities: []model.Entity{repoClass, repoMethod}}
 
 	svcFacts := &model.FileFacts{
+		Lang: model.LangTS,
 		File: "services/userService.ts",
 		Imports: []model.ImportBinding{
 			{LocalName: "UserRepository", Source: "../repositories/userRepository", ImportedName: "UserRepository"},
@@ -251,11 +294,12 @@ func TestResolve_ReceiverType_ImportedNameUsedAsStaticReceiver(t *testing.T) {
 	// `User.findById(...)` — User is a plain (non-namespace) import used
 	// directly as the call receiver, the dominant pattern in the real
 	// repo this was validated against (Mongoose model static-style calls).
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	userModel := entity(model.KindClass, "models/user.ts#User", "User")
-	userFacts := &model.FileFacts{File: "models/user.ts", Entities: []model.Entity{userModel}}
+	userFacts := &model.FileFacts{Lang: model.LangTS, File: "models/user.ts", Entities: []model.Entity{userModel}}
 
 	routeFacts := &model.FileFacts{
+		Lang:    model.LangTS,
 		File:    "routes/users.ts",
 		Imports: []model.ImportBinding{{LocalName: "User", Source: "../models/user", ImportedName: "User"}},
 		Refs: []model.Ref{
@@ -279,8 +323,9 @@ func TestResolve_ReceiverType_ImportedNameUsedAsStaticReceiver(t *testing.T) {
 }
 
 func TestResolve_ReceiverType_UnknownType_StaysUnimplemented(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	facts := &model.FileFacts{
+		Lang: model.LangTS,
 		File: "svc.ts",
 		Refs: []model.Ref{
 			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "thing", Member: "doStuff"}},
@@ -298,12 +343,13 @@ func TestResolve_ReceiverType_UnknownType_StaysUnimplemented(t *testing.T) {
 
 func TestResolve_TSConfigPathAlias(t *testing.T) {
 	idx := NewIndex("repo")
-	idx.SetTSConfig(TSConfig{BaseURL: ".", Paths: map[string][]string{"@/*": {"src/*"}}})
+	idx.RegisterPolicy(NewTSPolicy(TSConfig{BaseURL: ".", Paths: map[string][]string{"@/*": {"src/*"}}}))
 
 	svc := entity(model.KindClass, "src/services/userService.ts#UserService", "UserService")
-	svcFacts := &model.FileFacts{File: "src/services/userService.ts", Entities: []model.Entity{svc}}
+	svcFacts := &model.FileFacts{Lang: model.LangTS, File: "src/services/userService.ts", Entities: []model.Entity{svc}}
 
 	callerFacts := &model.FileFacts{
+		Lang:    model.LangTS,
 		File:    "src/app.ts",
 		Imports: []model.ImportBinding{{LocalName: "UserService", Source: "@/services/userService", ImportedName: "UserService"}},
 		Refs: []model.Ref{
@@ -329,16 +375,18 @@ func TestResolve_TSConfigPathAlias(t *testing.T) {
 }
 
 func TestResolve_BarrelReExport_Star(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	userModel := entity(model.KindClass, "models/user.ts#User", "User")
-	userFacts := &model.FileFacts{File: "models/user.ts", Entities: []model.Entity{userModel}}
+	userFacts := &model.FileFacts{Lang: model.LangTS, File: "models/user.ts", Entities: []model.Entity{userModel}}
 
 	barrelFacts := &model.FileFacts{
+		Lang:      model.LangTS,
 		File:      "models/index.ts",
 		ReExports: []model.ReExport{{Source: "./user", IsStar: true}},
 	}
 
 	callerFacts := &model.FileFacts{
+		Lang:    model.LangTS,
 		File:    "app.ts",
 		Imports: []model.ImportBinding{{LocalName: "User", Source: "./models", ImportedName: "User"}},
 		Refs: []model.Ref{
@@ -365,16 +413,18 @@ func TestResolve_BarrelReExport_Star(t *testing.T) {
 }
 
 func TestResolve_BarrelReExport_NamedWithAlias(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	orderModel := entity(model.KindClass, "models/order.ts#Order", "Order")
-	orderFacts := &model.FileFacts{File: "models/order.ts", Entities: []model.Entity{orderModel}}
+	orderFacts := &model.FileFacts{Lang: model.LangTS, File: "models/order.ts", Entities: []model.Entity{orderModel}}
 
 	barrelFacts := &model.FileFacts{
+		Lang:      model.LangTS,
 		File:      "models/index.ts",
 		ReExports: []model.ReExport{{Source: "./order", ExportedName: "Order", LocalAlias: "OrderModel"}},
 	}
 
 	callerFacts := &model.FileFacts{
+		Lang:    model.LangTS,
 		File:    "app.ts",
 		Imports: []model.ImportBinding{{LocalName: "OrderModel", Source: "./models", ImportedName: "OrderModel"}},
 		Refs: []model.Ref{
@@ -401,12 +451,13 @@ func TestResolve_BarrelReExport_NamedWithAlias(t *testing.T) {
 }
 
 func TestResolve_BarrelReExport_CycleIsSafe(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := tsIndex()
 	// a.ts re-exports everything from b.ts, and b.ts re-exports everything
 	// from a.ts — a cycle that must not hang or stack-overflow.
-	aFacts := &model.FileFacts{File: "a.ts", ReExports: []model.ReExport{{Source: "./b", IsStar: true}}}
-	bFacts := &model.FileFacts{File: "b.ts", ReExports: []model.ReExport{{Source: "./a", IsStar: true}}}
+	aFacts := &model.FileFacts{Lang: model.LangTS, File: "a.ts", ReExports: []model.ReExport{{Source: "./b", IsStar: true}}}
+	bFacts := &model.FileFacts{Lang: model.LangTS, File: "b.ts", ReExports: []model.ReExport{{Source: "./a", IsStar: true}}}
 	callerFacts := &model.FileFacts{
+		Lang:    model.LangTS,
 		File:    "app.ts",
 		Imports: []model.ImportBinding{{LocalName: "Missing", Source: "./a", ImportedName: "Missing"}},
 		Refs: []model.Ref{
@@ -443,8 +494,16 @@ func goEntity(kind model.Kind, qualified, name string) model.Entity {
 	}
 }
 
-func TestResolve_Go_SamePackageAcrossFiles(t *testing.T) {
+// goIndex mirrors tsIndex for Go — every test below exercises Go-specific
+// tiers, which only fire when Go's policy is explicitly registered.
+func goIndex(modulePath string) *Index {
 	idx := NewIndex("repo")
+	idx.RegisterPolicy(NewGoPolicy(modulePath))
+	return idx
+}
+
+func TestResolve_Go_SamePackageAcrossFiles(t *testing.T) {
+	idx := goIndex("")
 	// process is declared in a sibling file of the SAME package directory —
 	// TypeScript has no equivalent tier (every file is its own module
 	// there); Go's same-package tier is what makes this resolve.
@@ -470,8 +529,7 @@ func TestResolve_Go_SamePackageAcrossFiles(t *testing.T) {
 }
 
 func TestResolve_Go_PackageQualifiedImport(t *testing.T) {
-	idx := NewIndex("repo")
-	idx.SetGoModule("example.com/m")
+	idx := goIndex("example.com/m")
 
 	repoEnt := goEntity(model.KindFunction, "internal/repo#Validate", "Validate")
 	repoFacts := &model.FileFacts{Lang: model.LangGo, File: "internal/repo/repo.go", Entities: []model.Entity{repoEnt}}
@@ -499,8 +557,7 @@ func TestResolve_Go_PackageQualifiedImport(t *testing.T) {
 }
 
 func TestResolve_Go_StdlibImport_IsExternalKnown_NotABug(t *testing.T) {
-	idx := NewIndex("repo")
-	idx.SetGoModule("example.com/m")
+	idx := goIndex("example.com/m")
 
 	callerFacts := &model.FileFacts{
 		Lang: model.LangGo,
@@ -521,7 +578,7 @@ func TestResolve_Go_StdlibImport_IsExternalKnown_NotABug(t *testing.T) {
 }
 
 func TestResolve_Go_ReceiverTypeThroughStructField(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := goIndex("")
 
 	depEnt := goEntity(model.KindMethod, "internal/svc#Dep.Greeting", "Greeting")
 	depFacts := &model.FileFacts{Lang: model.LangGo, File: "internal/svc/dep.go", Entities: []model.Entity{depEnt}}
@@ -549,7 +606,7 @@ func TestResolve_Go_UnresolvedBareName_IsBugExtractorNotExternal(t *testing.T) {
 	// Unlike TypeScript, Go has no implicit unqualified globals — a bare
 	// call that isn't same-file, same-package, or a predeclared identifier
 	// signals a missed extraction, not a presumed-external reference.
-	idx := NewIndex("repo")
+	idx := goIndex("")
 	callerFacts := &model.FileFacts{
 		Lang: model.LangGo,
 		File: "internal/svc/service.go",
@@ -566,7 +623,7 @@ func TestResolve_Go_UnresolvedBareName_IsBugExtractorNotExternal(t *testing.T) {
 }
 
 func TestResolve_Go_PredeclaredIdentifier_IsNotABug(t *testing.T) {
-	idx := NewIndex("repo")
+	idx := goIndex("")
 	callerFacts := &model.FileFacts{
 		Lang: model.LangGo,
 		File: "internal/svc/service.go",
@@ -579,5 +636,28 @@ func TestResolve_Go_PredeclaredIdentifier_IsNotABug(t *testing.T) {
 	got := idx.Resolve([]*model.FileFacts{callerFacts})
 	if len(got) != 1 || got[0].Disposition != model.DispositionExternalKnown {
 		t.Fatalf("expected ExternalKnown for a Go predeclared identifier, got %+v", got)
+	}
+}
+
+func TestResolve_UnregisteredLanguage_IsUnclassifiedNotGuessed(t *testing.T) {
+	// A language with no registered policy (deliberately disabled for this
+	// run, per NewIndex's doc) must never silently fall through to another
+	// language's disposition rules — it gets a plain, honest
+	// Unclassified, not a guess.
+	idx := NewIndex("repo")
+	facts := &model.FileFacts{
+		Lang: model.Lang("python"),
+		File: "app.py",
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "helper"}},
+		},
+	}
+	idx.AddFile(facts)
+	got := idx.Resolve([]*model.FileFacts{facts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionUnclassified {
+		t.Fatalf("expected Unclassified for an unregistered language, got %+v", got)
+	}
+	if got[0].Disposition.IsBug() {
+		t.Fatal("a deliberately disabled language must not count toward bug_rate")
 	}
 }
