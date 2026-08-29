@@ -10,6 +10,16 @@
 // Built on the official github.com/modelcontextprotocol/go-sdk, not a
 // hand-rolled JSON-RPC/stdio implementation — the protocol itself is not
 // something this project has any reason to reimplement.
+//
+// Every handler declares a CONCRETE Out type (never `any`) so
+// mcp.AddTool's generic schema derivation has a real shape to work from.
+// Found the hard way, via a real agent (see docs/adr/0009-live-agent-demo.md):
+// with Out=any, AddTool synthesizes a bare-object output schema, and a
+// handler returning a slice (context_find, context_related) then fails
+// tools/call response validation with "expected: record" — a genuine bug
+// a live demo caught that the in-memory/subprocess tests in
+// mcpserver_test.go had not (they never asserted on StructuredContent's
+// shape for these two tools, only that Content was present).
 package mcpserver
 
 import (
@@ -17,6 +27,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/deatherick/cartograph/internal/model"
 	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
 )
@@ -69,12 +80,14 @@ func New(svc *service.Service) *mcp.Server {
 // errorResult reports a tool-level error inside Content with IsError set,
 // per the SDK's own guidance (mcp.CallToolResult's doc comment): tool
 // errors go in Content so the agent can see and self-correct, not as an
-// MCP protocol-level error.
-func errorResult(err error) (*mcp.CallToolResult, any, error) {
+// MCP protocol-level error. Generic over Out so every handler can return
+// its own zero value on the error path without an `any` escape hatch.
+func errorResult[Out any](err error) (*mcp.CallToolResult, Out, error) { //nolint:unparam // Out's zero value is the point of being generic here, not a fixed always-nil return
+	var zero Out
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 		IsError: true,
-	}, nil, nil
+	}, zero, nil
 }
 
 type indexArgs struct {
@@ -85,7 +98,7 @@ func indexHandler(svc *service.Service) mcp.ToolHandlerFor[indexArgs, any] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args indexArgs) (*mcp.CallToolResult, any, error) {
 		stats, err := svc.Index(ctx, args.Root, service.RepoName(args.Root))
 		if err != nil {
-			return errorResult(err)
+			return errorResult[any](err)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.IndexStats(stats)}}}, stats, nil
 	}
@@ -106,7 +119,7 @@ func compileHandler(svc *service.Service) mcp.ToolHandlerFor[compileArgs, any] {
 		}
 		capsule, err := svc.Context(args.Root, service.RepoName(args.Root), args.Task, budget, args.SessionID)
 		if err != nil {
-			return errorResult(err)
+			return errorResult[any](err)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Capsule(capsule)}}}, capsule, nil
 	}
@@ -117,13 +130,20 @@ type findArgs struct {
 	Name string `json:"name" jsonschema:"bare name, or qualified name (containing '#'), of the entity to find"`
 }
 
-func findHandler(svc *service.Service) mcp.ToolHandlerFor[findArgs, any] {
-	return func(ctx context.Context, req *mcp.CallToolRequest, args findArgs) (*mcp.CallToolResult, any, error) {
+// findResult wraps the slice Find returns — see the package doc: a bare
+// slice as a handler's Out value fails output-schema validation, so every
+// tool here returns a named struct, never a raw slice/array.
+type findResult struct {
+	Entities []model.Entity `json:"entities"`
+}
+
+func findHandler(svc *service.Service) mcp.ToolHandlerFor[findArgs, findResult] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args findArgs) (*mcp.CallToolResult, findResult, error) {
 		entities, err := svc.Find(args.Root, service.RepoName(args.Root), args.Name)
 		if err != nil {
-			return errorResult(err)
+			return errorResult[findResult](err)
 		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Entities(args.Name, entities)}}}, entities, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Entities(args.Name, entities)}}}, findResult{Entities: entities}, nil
 	}
 }
 
@@ -133,11 +153,11 @@ type inspectArgs struct {
 	File string `json:"file,omitempty" jsonschema:"substring to disambiguate when name matches entities in more than one file"`
 }
 
-func inspectHandler(svc *service.Service) mcp.ToolHandlerFor[inspectArgs, any] {
-	return func(ctx context.Context, req *mcp.CallToolRequest, args inspectArgs) (*mcp.CallToolResult, any, error) {
+func inspectHandler(svc *service.Service) mcp.ToolHandlerFor[inspectArgs, service.Inspection] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args inspectArgs) (*mcp.CallToolResult, service.Inspection, error) {
 		insp, err := svc.Inspect(args.Root, service.RepoName(args.Root), args.Name, args.File)
 		if err != nil {
-			return errorResult(err)
+			return errorResult[service.Inspection](err)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Inspection(insp)}}}, insp, nil
 	}
@@ -150,17 +170,22 @@ type relatedArgs struct {
 	Depth int    `json:"depth,omitempty" jsonschema:"graph traversal depth in hops (default 2)"`
 }
 
-func relatedHandler(svc *service.Service) mcp.ToolHandlerFor[relatedArgs, any] {
-	return func(ctx context.Context, req *mcp.CallToolRequest, args relatedArgs) (*mcp.CallToolResult, any, error) {
+// relatedResult wraps the slice Related returns — see findResult's doc.
+type relatedResult struct {
+	Related []model.RelatedEntity `json:"related"`
+}
+
+func relatedHandler(svc *service.Service) mcp.ToolHandlerFor[relatedArgs, relatedResult] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args relatedArgs) (*mcp.CallToolResult, relatedResult, error) {
 		depth := args.Depth
 		if depth <= 0 {
 			depth = 2
 		}
 		related, err := svc.Related(args.Root, service.RepoName(args.Root), args.Name, args.File, depth)
 		if err != nil {
-			return errorResult(err)
+			return errorResult[relatedResult](err)
 		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Related(args.Name, depth, related)}}}, related, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Related(args.Name, depth, related)}}}, relatedResult{Related: related}, nil
 	}
 }
 
@@ -171,17 +196,16 @@ type sourceArgs struct {
 }
 
 type sourceResult struct {
-	Entity any    `json:"entity"`
-	Source string `json:"source"`
+	Entity model.Entity `json:"entity"`
+	Source string       `json:"source"`
 }
 
-func sourceHandler(svc *service.Service) mcp.ToolHandlerFor[sourceArgs, any] {
-	return func(ctx context.Context, req *mcp.CallToolRequest, args sourceArgs) (*mcp.CallToolResult, any, error) {
+func sourceHandler(svc *service.Service) mcp.ToolHandlerFor[sourceArgs, sourceResult] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args sourceArgs) (*mcp.CallToolResult, sourceResult, error) {
 		src, e, err := svc.Source(args.Root, service.RepoName(args.Root), args.Name, args.File)
 		if err != nil {
-			return errorResult(err)
+			return errorResult[sourceResult](err)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Source(e, src)}}}, sourceResult{Entity: e, Source: src}, nil
 	}
 }
-

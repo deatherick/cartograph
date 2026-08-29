@@ -192,3 +192,50 @@ func TestMCPServer_CompileWithSession_SecondCallCostsLess(t *testing.T) {
 		t.Errorf("expected the second call in the same session to be smaller (ledger dedup): first=%d bytes second=%d bytes", len(first), len(second))
 	}
 }
+
+// TestMCPServer_StructuredContentIsAlwaysAnObject is a regression test for
+// a real bug a live agent demo found (docs/adr/0009-live-agent-demo.md):
+// context_find and context_related originally declared Out=any and
+// returned a bare slice, which mcp.AddTool's generic schema derivation
+// turns into an output schema expecting a JSON object ("record") — so the
+// slice value failed tools/call response validation with "expected:
+// record" every single time, in a way none of this file's other tests
+// caught, because they only asserted Content was present, never that
+// StructuredContent actually validated against the tool's own schema.
+//
+// The fix (wrapping every slice-shaped result in a named struct) is
+// verified here the same way the failure was found: attempt to unmarshal
+// StructuredContent as a JSON object. A bare array fails this immediately;
+// an object (even an empty one) succeeds.
+func TestMCPServer_StructuredContentIsAlwaysAnObject(t *testing.T) {
+	cs := connect(t)
+	root := fixtureRoot(t)
+	callTool(t, cs, "context_index", map[string]any{"root": root})
+
+	cases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"context_find", map[string]any{"root": root, "name": "UserService"}},
+		{"context_related", map[string]any{"root": root, "name": "UserService", "file": "services", "depth": 2}},
+		{"context_inspect", map[string]any{"root": root, "name": "UserService", "file": "services"}},
+		{"context_source", map[string]any{"root": root, "name": "register", "file": "services"}},
+		{"context_compile", map[string]any{"root": root, "task": "UserService register", "budget": 500}},
+	}
+	for _, c := range cases {
+		t.Run(c.tool, func(t *testing.T) {
+			res := callTool(t, cs, c.tool, c.args)
+			if res.IsError {
+				t.Fatalf("%s returned an error: %s", c.tool, textOf(t, res))
+			}
+			raw, err := json.Marshal(res.StructuredContent)
+			if err != nil {
+				t.Fatalf("%s: StructuredContent did not marshal: %v", c.tool, err)
+			}
+			var obj map[string]any
+			if err := json.Unmarshal(raw, &obj); err != nil {
+				t.Fatalf("%s: StructuredContent is not a JSON object (this is exactly the bug the live demo found — a bare array/slice Out value fails tools/call schema validation with \"expected: record\"): %v\nraw: %s", c.tool, err, raw)
+			}
+		})
+	}
+}
