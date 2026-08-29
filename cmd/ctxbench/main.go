@@ -33,6 +33,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/deatherick/cartograph/internal/exclude"
 	"github.com/deatherick/cartograph/internal/tokencount"
 )
 
@@ -138,6 +139,11 @@ func runTask(fixtureDir string, t task) taskResult {
 // "relative/path.ts:N: <line content>", the same shape a human running
 // ripgrep would read on screen. Matching is line-based and regex-based,
 // mirroring grep -n semantics closely enough for token-cost purposes.
+//
+// The walk goes through internal/exclude so that a real cloned repository
+// (dependency directories, lockfiles, binary data files) does not pollute
+// the traced baseline with noise nobody would actually grep through — see
+// internal/exclude's package doc for why this exists.
 func grepFixture(root, pattern string) (string, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
@@ -145,17 +151,7 @@ func grepFixture(root, pattern string) (string, error) {
 	}
 
 	var matches []string
-	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
+	err = exclude.WalkSource(root, func(path string, content []byte) error {
 		rel, _ := filepath.Rel(root, path)
 		rel = filepath.ToSlash(rel)
 		for i, line := range strings.Split(string(content), "\n") {

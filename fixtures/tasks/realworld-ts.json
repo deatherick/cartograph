@@ -1,0 +1,113 @@
+{
+  "fixture": "realworld-ts",
+  "note": "External real-world repo, not vendored into this repository. Clone locally before running: git clone --depth 1 https://github.com/skopekreep/typescript-node-express-realworld-example-app ~/code/_ref/realworld-ts, then run ctxbench with --fixtures-root ~/code/_ref --tasks fixtures/tasks/realworld-ts.json. Gold sets are whole-file for V0, same limitation as fixtures/tasks/ts-basic.json — see its note.",
+  "tasks": [
+    {
+      "id": "R01",
+      "prompt": "Add a rate limit so a user can create at most 5 articles per hour.",
+      "gold_files": ["src/routes/articles-routes.ts", "src/database/models/user.model.ts", "src/utilities/authentication.ts"],
+      "grep_steps": [
+        { "pattern": "router.post\\('/', authentication.required", "note": "find article creation route" },
+        { "pattern": "authentication.required", "note": "find how auth is enforced" }
+      ]
+    },
+    {
+      "id": "R02",
+      "prompt": "Why does favoriting an article update a count instead of just checking array length at read time?",
+      "gold_files": ["src/database/models/article.model.ts", "src/database/models/user.model.ts", "src/routes/articles-routes.ts"],
+      "grep_steps": [
+        { "pattern": "favoritesCount", "note": "find the cached count field" },
+        { "pattern": "updateFavoriteCount", "note": "find where it's recomputed" },
+        { "pattern": "/favorite", "note": "find the favorite/unfavorite routes" }
+      ]
+    },
+    {
+      "id": "R03",
+      "prompt": "Add an endpoint to let a user block another user, reusing the follow/unfollow pattern.",
+      "gold_files": ["src/routes/profiles-routes.ts", "src/database/models/user.model.ts", "src/interfaces/user-interface.ts"],
+      "grep_steps": [
+        { "pattern": "follow|unfollow", "note": "existing follow pattern to mirror" },
+        { "pattern": "isFollowing", "note": "existing membership check" }
+      ]
+    },
+    {
+      "id": "R04",
+      "prompt": "What breaks if a comment's author account is deleted — is there a cascade or does toJSONFor crash?",
+      "gold_files": ["src/database/models/comment.model.ts", "src/database/models/user.model.ts", "src/routes/articles-routes.ts"],
+      "grep_steps": [
+        { "pattern": "toJSONFor", "note": "find serialization that reads author" },
+        { "pattern": "author.toProfileJSONFor", "note": "confirm the crash point if author is null" }
+      ]
+    },
+    {
+      "id": "R05",
+      "prompt": "Add server-side validation that an article's tagList has at most 5 tags.",
+      "gold_files": ["src/database/models/article.model.ts", "src/routes/articles-routes.ts", "src/interfaces/article-interface.ts"],
+      "grep_steps": [
+        { "pattern": "tagList", "note": "find where tags are set" },
+        { "pattern": "router.post\\('/'", "note": "find article creation" }
+      ]
+    },
+    {
+      "id": "R06",
+      "prompt": "Is JWT expiration configurable, or hardcoded? Where would I change token lifetime?",
+      "gold_files": ["src/database/models/user.model.ts", "src/utilities/secrets.ts"],
+      "grep_steps": [
+        { "pattern": "generateJWT", "note": "find token generation" },
+        { "pattern": "setDate|exp", "note": "find expiration logic" }
+      ]
+    },
+    {
+      "id": "R07",
+      "prompt": "Add pagination limit validation so ?limit=99999 can't be used to dump the whole articles table.",
+      "gold_files": ["src/routes/articles-routes.ts"],
+      "grep_steps": [
+        { "pattern": "req.query.limit", "note": "find where limit is read from the query string" }
+      ]
+    },
+    {
+      "id": "R08",
+      "prompt": "Trace what happens end-to-end when a PUT /api/user request updates a password.",
+      "gold_files": ["src/routes/users-routes.ts", "src/database/models/user.model.ts"],
+      "grep_steps": [
+        { "pattern": "router.put\\('/user'", "note": "find the update-user route" },
+        { "pattern": "setPassword", "note": "find password hashing" }
+      ]
+    },
+    {
+      "id": "R09",
+      "prompt": "Is there an existing helper for building a JSON:API-style profile response I should reuse before writing a new one for comments?",
+      "gold_files": ["src/database/models/user.model.ts", "src/database/models/comment.model.ts"],
+      "grep_steps": [
+        { "pattern": "toProfileJSONFor", "note": "look for an existing profile serializer" },
+        { "pattern": "toJSONFor", "note": "look for other serializers by convention" }
+      ]
+    },
+    {
+      "id": "R10",
+      "prompt": "List every route that trusts req.payload.id without first checking authentication.required is on that route — a security review flagged this.",
+      "gold_files": ["src/routes/articles-routes.ts", "src/routes/users-routes.ts", "src/routes/profiles-routes.ts"],
+      "grep_steps": [
+        { "pattern": "req.payload", "note": "every read of the auth payload" },
+        { "pattern": "authentication.required|authentication.optional", "note": "every route's auth mode" }
+      ]
+    },
+    {
+      "id": "R11",
+      "prompt": "Add a DELETE /api/articles/:article/comments/:comment endpoint, mirroring the existing comment-related routes.",
+      "gold_files": ["src/routes/articles-routes.ts", "src/database/models/comment.model.ts", "src/database/models/article.model.ts"],
+      "grep_steps": [
+        { "pattern": "router.param\\('comment'", "note": "existing comment param preload" },
+        { "pattern": "/comments", "note": "existing comment routes" }
+      ]
+    },
+    {
+      "id": "R12",
+      "prompt": "The slug generator uses Math.random() for uniqueness — is that a real collision risk, and where else does slugify get called from?",
+      "gold_files": ["src/database/models/article.model.ts"],
+      "grep_steps": [
+        { "pattern": "slugify", "note": "find slug generation and its call sites" }
+      ]
+    }
+  ]
+}

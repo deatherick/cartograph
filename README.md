@@ -10,6 +10,16 @@ Status: early scaffolding (Fase 0b). Not yet functional.
 
 - `docs/research/` — discovery notes on Grafel (MIT, studied as reference, not copied)
 - `docs/adr/` — architecture decision records for this project
+- `docs/benchmarks/` — frozen `ctxbench` baseline results per phase, for comparing across phases
 - `cmd/ctxbench/` — token-economy benchmark harness (the metric the project is measured against)
 
 See the project plan for the full phased roadmap.
+
+## Running the benchmark
+
+```bash
+make bench       # synthetic fixture, vendored in this repo
+make bench-real  # real external repo, auto-cloned to ~/code/_ref, never vendored
+```
+
+See `docs/benchmarks/README.md` for how to read and reproduce the frozen results.
