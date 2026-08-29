@@ -37,6 +37,7 @@ reference is their issue number, kept as traceability for where the case came fr
 | B10 | Qualified call vs. bare name with the same name in the same file | #4554 | 1 |
 | B11 | Filtering by the leaf name's kind: `Foo.bar` must not link to a `bar` of an incompatible kind | #6141 | 1 |
 | B12 | Dynamic import / `require()` with a constructed string → `dynamic` disposition, not a bug | ADR-0011 | 1 |
+| B13 | **Receiver-type inference** (`obj.method()` where `obj` is a local variable or constructor-injected property, not an import) — biggest open gap after the Phase 1 vertical slice: 181 of ~236 refs in a real-repo validation run are `DispositionUnimplemented` for exactly this reason | ADR-0012, ADR-0004 | 1 (open) |
 
 ## C. TypeScript / JavaScript (Phase 1)
 
@@ -54,6 +55,8 @@ reference is their issue number, kept as traceability for where the case came fr
 | C10 | Destructuring of constants used as an extraction gate | #2338 |
 | C11 | Type-only `.d.ts` file: bodyless entities | TS |
 | C12 | Monorepo with workspaces: import crossing the package boundary | Cross-repo |
+| C13 | **Prototype/schema-method assignment** (`X.methods.foo = function(){}`) — found missing entirely against a real repo (11 Mongoose model methods in one file, all invisible); fixed same session, see ADR-0004 | real-repo validation, ADR-0004 |
+| C14 | **`this.method()` single-level call** (no intermediate member) — the most common call shape in OOP-style code; found entirely uncaptured against a real repo, fixed same session, see ADR-0004 | real-repo validation, ADR-0004 |
 
 ## D. C# (Phase 3)
 
