@@ -6,9 +6,10 @@ A tool that keeps a deterministic structural map of a codebase and compiles the
 **minimum useful context** for a task, under an explicit token budget — for AI coding agents
 and humans alike.
 
-**Status**: Phase 2 core done (TypeScript extraction, resolution, and the Context Compiler all
-built and measured — see `docs/MVP.md`). MCP wiring is the one remaining piece before MVP.
-Functional via CLI today; not yet daemonized, not yet multi-language.
+**Status**: Phase 2 done — TypeScript extraction, resolution, the Context Compiler, and an MCP
+server are all built and measured (see `docs/MVP.md`). A live agent demo and a proper quickstart
+are the only things left before MVP. Functional via CLI and MCP today; not yet daemonized, not
+yet multi-language.
 
 **Start here**: [`docs/MVP.md`](docs/MVP.md) — what's done, what's left, what's deliberately
 deferred, so work stays scoped to shipping v0.1 instead of open-ended iteration.
@@ -28,6 +29,18 @@ make build
 `index` runs the full pipeline and persists a snapshot; every other command reads that snapshot
 instead of re-indexing. Re-run `index` after the source changes (no staleness detection yet —
 see `docs/MVP.md`'s known-issues list).
+
+## Using it from an agent (MCP)
+
+```bash
+make build
+./bin/ctxmcp   # runs the MCP server over stdio
+```
+
+Point an MCP client (Claude Code or any other) at `bin/ctxmcp`. It exposes `context_index`,
+`context_compile`, `context_find`, `context_inspect`, `context_related`, and `context_source` —
+the same operations as the CLI, over the same service layer (`internal/service`), rendered
+through the same formatter (`internal/render`). See ADR-0008 for how it's built and tested.
 
 ## Documentation map
 

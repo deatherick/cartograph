@@ -13,7 +13,7 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 0a — Discovery on Grafel | ✅ Done |
 | 0b — Foundations, `ctxbench` | ✅ Done |
 | 1 — TypeScript static map | ✅ Done (ADR-0004/0005/0006) |
-| 2 — Context Compiler | 🟡 Core done and passing its exit criterion (ADR-0007); **MCP wiring still open — see below** |
+| 2 — Context Compiler + MCP | 🟡 Core done and passing its exit criterion (ADR-0007); MCP server done (ADR-0008); **live agent demo still open — see below** |
 | 3 — Go/C#/Python, daemon, incremental indexing | ⬜ Post-MVP (this session's decision) |
 | 4-9 — Impact analysis, duplicates, Web UI, cross-repo, AI, hardening | ⬜ Post-MVP |
 
@@ -49,9 +49,12 @@ Phase 2 still required for MVP**, not a nice-to-have.
 - [x] CLI: `index`, `find`, `inspect`, `related`, `source`, `stats`, `context`
 - [x] Context Compiler: ranker + real knapsack budgeter + Context Ledger, meeting its exit
       criterion on the project's own benchmark (70.7% reduction, 0.87 recall@gold) — ADR-0007
-- [ ] **MCP server** exposing the CLI's read surface (`context_compile`, `context_find`,
-      `context_related`, `context_inspect`, `context_source`) over stdio, so an agent (Claude
-      Code or similar) can actually use this instead of only a human via CLI — **next task**
+- [x] **MCP server** (`internal/mcpserver`, `cmd/ctxmcp`) exposing `context_index`,
+      `context_compile`, `context_find`, `context_related`, `context_inspect`, `context_source`
+      over stdio via the official `modelcontextprotocol/go-sdk`, so an agent can use this
+      directly instead of only a human via CLI — ADR-0008. Verified two ways: in-memory
+      transport tests (7 tests, including the Context Ledger's dedup working through MCP) and a
+      real subprocess test spawning the actual `bin/ctxmcp` binary via `CommandTransport`.
 - [ ] **One end-to-end live demo**: a real coding agent connected via MCP resolves a real task
       against a real repo using capsule + 2-3 targeted reads, not just `ctxbench` numbers —
       **the actual "does this work" proof, still outstanding**
@@ -148,15 +151,12 @@ rediscover this later" list.
 
 ## Immediate next steps, in order
 
-1. **MCP server** (`internal/mcp` or similar) wrapping the existing `internal/service` layer —
-   no new product logic, purely an adapter, consistent with the project's "one service layer"
-   rule. Minimal tool set: `context_compile`, `context_find`, `context_related`,
-   `context_inspect`, `context_source`.
+1. ~~MCP server~~ — done, ADR-0008.
 2. **Live demo**: connect a real agent (Claude Code) to the MCP server and resolve one real task
    against the real-repo validation clone, measuring actual file reads before/after — the proof
-   the whole project has been building toward.
+   the whole project has been building toward. **The only functional item left.**
 3. **README quickstart** — a new user/contributor should be able to clone, build, index a repo,
    and run one query without reading 7 ADRs first.
-4. Once those three ship: MVP is done. Anything after that is Phase 3+ per this document's
+4. Once those two ship: MVP is done. Anything after that is Phase 3+ per this document's
    deferred list, prioritized by real usage feedback from the live demo, not by continuing to
    iterate on ranker constants against one synthetic fixture.

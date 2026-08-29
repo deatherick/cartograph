@@ -2,21 +2,20 @@
 // static-map subcommands: `index` runs the full pipeline and persists a
 // snapshot (internal/store); find/related/stats read that snapshot
 // instead of re-indexing. Phase 2 adds `context`, wired to
-// internal/compile — the Context Compiler.
+// internal/compile — the Context Compiler — and an MCP server
+// (cmd/ctxmcp) so an agent, not just this CLI, can use the same
+// service layer. All formatting lives in internal/render, shared with
+// the MCP server so output is not duplicated between interfaces.
 package main
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/deatherick/cartograph/internal/compile"
-	"github.com/deatherick/cartograph/internal/index"
-	"github.com/deatherick/cartograph/internal/model"
+	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
 )
 
@@ -70,16 +69,6 @@ find/related/stats read the snapshot persisted by the last `+"`ctx index`"+` run
 do not re-index. Run `+"`ctx index <path>`"+` first, and again after the source changes.`)
 }
 
-// repoName derives a stable repo identity from the given path when the
-// caller has no better name — the last path component.
-func repoName(root string) string {
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		return filepath.Base(root)
-	}
-	return filepath.Base(strings.TrimRight(abs, string(filepath.Separator)))
-}
-
 // flagValue returns the value following flag in args, or "" if flag is
 // absent — a small shared helper so --file (and, later, other optional
 // flags) don't need bespoke parsing in every subcommand.
@@ -99,11 +88,11 @@ func runIndex(svc *service.Service, args []string) error {
 	root := args[0]
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	stats, err := svc.Index(ctx, root, repoName(root))
+	stats, err := svc.Index(ctx, root, service.RepoName(root))
 	if err != nil {
 		return err
 	}
-	printIndexStats(stats)
+	fmt.Print(render.IndexStats(stats))
 	return nil
 }
 
@@ -120,57 +109,12 @@ func runContext(svc *service.Service, args []string) error {
 	}
 	session := flagValue(args, "--session")
 
-	capsule, err := svc.Context(root, repoName(root), task, budget, session)
+	capsule, err := svc.Context(root, service.RepoName(root), task, budget, session)
 	if err != nil {
 		return err
 	}
-	printCapsule(capsule)
+	fmt.Print(render.Capsule(capsule))
 	return nil
-}
-
-// printCapsule renders the token-dense capsule format the project plan
-// specifies — stable and parseable, not prose, so an agent (or a human
-// scanning quickly) can find PRIMARY/RELATED sections and expand handles.
-func printCapsule(c *compile.Capsule) {
-	fmt.Printf("TASK  %s\n", c.Task)
-	sessionPart := ""
-	if c.SessionID != "" {
-		sessionPart = " · SESSION " + c.SessionID
-	}
-	fmt.Printf("BUDGET %d · USED %d · CONSIDERED %d%s\n\n", c.Budget, c.Used, c.Considered, sessionPart)
-
-	printSection(c, "primary", "PRIMARY")
-	printSection(c, "related", "RELATED")
-
-	if len(c.Items) == 0 {
-		fmt.Println("(no relevant entities found for this task)")
-	}
-}
-
-func printSection(c *compile.Capsule, category, header string) {
-	var items []compile.Item
-	for _, it := range c.Items {
-		if it.Category == category {
-			items = append(items, it)
-		}
-	}
-	if len(items) == 0 {
-		return
-	}
-	fmt.Println(header)
-	for _, it := range items {
-		tag := ""
-		if it.AlreadySent {
-			tag = " [already sent — handle: " + it.Handle + "]"
-		}
-		fmt.Printf("%-4s %-9s %-45s [%s, %d tok]%s\n", it.Handle, it.Entity.Kind, it.Entity.Qualified, it.Level, it.Tokens, tag)
-		if !it.AlreadySent && it.Level != compile.LevelName {
-			for _, line := range strings.Split(strings.TrimRight(it.Text, "\n"), "\n") {
-				fmt.Printf("     %s\n", line)
-			}
-		}
-	}
-	fmt.Println()
 }
 
 func runFind(svc *service.Service, args []string) error {
@@ -178,17 +122,11 @@ func runFind(svc *service.Service, args []string) error {
 		return fmt.Errorf("usage: ctx find <path> <name>")
 	}
 	root, name := args[0], args[1]
-	entities, err := svc.Find(root, repoName(root), name)
+	entities, err := svc.Find(root, service.RepoName(root), name)
 	if err != nil {
 		return err
 	}
-	if len(entities) == 0 {
-		fmt.Printf("no entity named %q found\n", name)
-		return nil
-	}
-	for _, e := range entities {
-		fmt.Printf("%-10s %-40s %s:%d-%d\n", e.Kind, e.Qualified, e.Anchor.File, e.Anchor.StartLine, e.Anchor.EndLine)
-	}
+	fmt.Print(render.Entities(name, entities))
 	return nil
 }
 
@@ -197,24 +135,11 @@ func runInspect(svc *service.Service, args []string) error {
 		return fmt.Errorf("usage: ctx inspect <path> <name> [--file <substring>]")
 	}
 	root, name := args[0], args[1]
-	insp, err := svc.Inspect(root, repoName(root), name, flagValue(args, "--file"))
+	insp, err := svc.Inspect(root, service.RepoName(root), name, flagValue(args, "--file"))
 	if err != nil {
 		return err
 	}
-	e := insp.Entity
-	fmt.Printf("%s %s\n", e.Kind, e.Qualified)
-	if e.Signature != "" {
-		fmt.Printf("  signature: %s\n", e.Signature)
-	}
-	fmt.Printf("  location:  %s:%d-%d\n", e.Anchor.File, e.Anchor.StartLine, e.Anchor.EndLine)
-	fmt.Printf("  fan-out (%d) — what it calls/extends/implements/uses:\n", len(insp.FanOut))
-	for _, edge := range insp.FanOut {
-		fmt.Printf("    -> %s %s (%s, conf=%.2f)\n", edge.Kind, edge.Dst, edge.Provenance, edge.Confidence)
-	}
-	fmt.Printf("  fan-in (%d) — who calls/extends/implements/uses it:\n", len(insp.FanIn))
-	for _, edge := range insp.FanIn {
-		fmt.Printf("    <- %s %s (%s, conf=%.2f)\n", edge.Kind, edge.Src, edge.Provenance, edge.Confidence)
-	}
+	fmt.Print(render.Inspection(insp))
 	return nil
 }
 
@@ -223,12 +148,11 @@ func runSource(svc *service.Service, args []string) error {
 		return fmt.Errorf("usage: ctx source <path> <name> [--file <substring>]")
 	}
 	root, name := args[0], args[1]
-	src, e, err := svc.Source(root, repoName(root), name, flagValue(args, "--file"))
+	src, e, err := svc.Source(root, service.RepoName(root), name, flagValue(args, "--file"))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("# %s %s (%s:%d-%d)\n", e.Kind, e.Qualified, e.Anchor.File, e.Anchor.StartLine, e.Anchor.EndLine)
-	fmt.Print(src)
+	fmt.Print(render.Source(e, src))
 	return nil
 }
 
@@ -245,18 +169,11 @@ func runRelated(svc *service.Service, args []string) error {
 			}
 		}
 	}
-	related, err := svc.Related(root, repoName(root), name, flagValue(args, "--file"), depth)
+	related, err := svc.Related(root, service.RepoName(root), name, flagValue(args, "--file"), depth)
 	if err != nil {
 		return err
 	}
-	if len(related) == 0 {
-		fmt.Printf("no related entities found within %d hop(s) of %q\n", depth, name)
-		return nil
-	}
-	for _, r := range related {
-		fmt.Printf("[depth %d] %-10s %-40s via %s (%s, conf=%.2f)\n",
-			r.Depth, r.Entity.Kind, r.Entity.Qualified, r.Via.Kind, r.Via.Provenance, r.Via.Confidence)
-	}
+	fmt.Print(render.Related(name, depth, related))
 	return nil
 }
 
@@ -265,25 +182,10 @@ func runStats(svc *service.Service, args []string) error {
 		return fmt.Errorf("usage: ctx stats <path>")
 	}
 	root := args[0]
-	stats, err := svc.Stats(root, repoName(root))
+	stats, err := svc.Stats(root, service.RepoName(root))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("repo:     %s\n", stats.Repo)
-	fmt.Printf("entities: %d\n", stats.Entities)
+	fmt.Print(render.Stats(stats))
 	return nil
-}
-
-func printIndexStats(s index.Stats) {
-	fmt.Printf("files:          %d\n", s.Files)
-	fmt.Printf("entities:       %d\n", s.Entities)
-	fmt.Printf("resolved edges: %d\n", s.ResolvedEdges)
-	fmt.Printf("bug_rate:       %.1f%%\n", s.BugRate()*100)
-	fmt.Printf("duration:       %s\n", s.Duration)
-	fmt.Println("dispositions:")
-	for _, d := range []string{"resolved", "external-known", "external-unknown", "dynamic", "ambiguous", "bug-extractor", "bug-resolver", "unimplemented", "unclassified"} {
-		if n, ok := s.Dispositions[model.Disposition(d)]; ok {
-			fmt.Printf("  %-18s %d\n", d, n)
-		}
-	}
 }

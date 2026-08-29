@@ -30,6 +30,21 @@ type Service struct{}
 // New constructs a Service.
 func New() *Service { return &Service{} }
 
+// RepoName derives a stable repo identity from a filesystem path when the
+// caller has no better name — the last path component of the absolute
+// path. Every interface (cmd/ctx, internal/mcpserver) uses this same
+// derivation, since every Service method takes an explicit repo string
+// rather than deriving it internally — kept here, not duplicated per
+// interface, per the package doc's "no logic duplicated between
+// interfaces" rule.
+func RepoName(root string) string {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return filepath.Base(root)
+	}
+	return filepath.Base(strings.TrimRight(abs, string(filepath.Separator)))
+}
+
 // Index runs a full index of root, persists a snapshot for repo, and
 // returns the run statistics (file/entity/edge counts, duration, and the
 // disposition breakdown bug_rate is computed from).

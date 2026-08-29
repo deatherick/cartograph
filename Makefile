@@ -4,6 +4,7 @@ build:
 	go build -o bin/ctx ./cmd/ctx
 	go build -o bin/ctxd ./cmd/ctxd
 	go build -o bin/ctxbench ./cmd/ctxbench
+	go build -o bin/ctxmcp ./cmd/ctxmcp
 
 test:
 	go test ./... -race
