@@ -14,7 +14,9 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 0b — Foundations, `ctxbench` | ✅ Done |
 | 1 — TypeScript static map | ✅ Done (ADR-0004/0005/0006) |
 | 2 — Context Compiler + MCP | ✅ Done — Context Compiler (ADR-0007), MCP server (ADR-0008), live agent demo (ADR-0009), README quickstart. **MVP shipped.** |
-| 3 — Go/C#/Python, daemon, incremental indexing | ⬜ Post-MVP (this session's decision) |
+| 3a — Go extractor + self-hosting | ✅ Done (ADR-0010) — 0.1% bug_rate indexing this project's own real Go source |
+| 3b/3c — C#, Python extractors | ⬜ Post-MVP |
+| 3d — Daemon, incremental indexing, file watcher | ⬜ Post-MVP |
 | 4-9 — Impact analysis, duplicates, Web UI, cross-repo, AI, hardening | ⬜ Post-MVP |
 
 ## What "MVP" means for this project
@@ -96,10 +98,26 @@ rediscover this later" list.
   (`internal/resolve/resolve.go`).
 
 ### Resolution (`internal/resolve`)
-- `ScopeLocal` refs are handled correctly but never emitted by the current extractor — the
-  pipeline is ready, nothing produces this case yet (`internal/resolve/resolve.go`).
 - tsconfig path aliases only support single-wildcard patterns (`"@/*": ["src/*"]`) — multi-segment
   or regex-like patterns are unsupported.
+
+### Extraction and resolution (`internal/parser/golang`) — ADR-0010
+Measured at 0.1% bug_rate self-hosting on this project's own real Go source (54 files, 393
+entities, 1,916 dispositions) — these are the documented gaps behind that number, not blockers:
+- A local variable's function type inferred from a multi-return call's second value (`ctx, cancel
+  := context.WithTimeout(...)`) is not detected — only a syntactic func literal or a func-typed
+  annotation is. The one remaining bug-extractor case in the self-hosting measurement.
+- Struct fields typed from another package via `pkg.Type` (`repo *pkg.UserRepo`) produce no
+  receiver-type signal — only bare `type_identifier` fields do. A call through such a field
+  resolves to `DispositionUnimplemented`, not a wrong answer.
+- No export-awareness — same gap as TypeScript's resolver, not fixed twice.
+- Go's implicit interface satisfaction (no `implements` keyword) is a **permanent** gap: this
+  extractor never emits `RefImplements` for Go — detecting it needs real type-checking, not
+  tree-sitter queries.
+- An import's local identifier, when no alias is written, is approximated as the import path's
+  last path segment — wrong only for the rare package whose declared name differs from its
+  directory name.
+- Dot imports (`. "pkg"`) are not resolved — a rare, discouraged Go idiom.
 
 ### Context Compiler (`internal/compile`)
 - Seeding is crude term-overlap (with camelCase splitting), not BM25/FTS5 — explicitly deferred
@@ -139,9 +157,9 @@ rediscover this later" list.
 
 ## Explicitly deferred (post-MVP, tracked not forgotten)
 
-- **Go/C#/Python extraction** (Phase 3) — includes the literal self-hosting milestone (Cartograph
-  indexing its own Go source), decided this session to defer rather than build now.
-- **Daemon + incremental indexing + file watcher** (Phase 3) — FSEvents on macOS, inotify on
+- **C#/Python extraction** (Phase 3b/3c) — Go shipped first (ADR-0010); these two remain
+  post-MVP.
+- **Daemon + incremental indexing + file watcher** (Phase 3d) — FSEvents on macOS, inotify on
   Linux, content-hash re-anchoring; the watcher exclusion layers (static skip list, `.gitignore`,
   adaptive churn quarantine) are designed in `docs/research/05` but not implemented.
 - **SQLite + FTS5 full-text search** (whenever SQLite is introduced for its already-scoped
@@ -154,8 +172,6 @@ rediscover this later" list.
 - **Cross-repo linking, learned relationships, agent policy files** (Phase 7).
 - **Optional AI provider integration, Ask AI** (Phase 8).
 - **Hardening, installer, distribution** (Phase 9).
-- **True self-hosting / dogfooding** (Cartograph analyzing its own Go source) — depends on the
-  deferred Go extractor above. Revisit once Phase 3 lands.
 
 ## Immediate next steps, in order
 
@@ -164,6 +180,10 @@ rediscover this later" list.
    `context_find`/`context_related` along the way.
 3. ~~README quickstart~~ — done. A new user/contributor can clone, build, index a repo, and run
    one query without reading 8 ADRs first.
-4. **MVP is done.** Everything from here is Phase 3+ per this document's deferred list,
-   prioritized by real usage feedback from the live demo, not by continuing to iterate on ranker
-   constants against one synthetic fixture.
+4. ~~MVP shipped~~. ~~Go extractor + self-hosting~~ — done, ADR-0010: 0.1% bug_rate indexing this
+   project's own real source, `ctx find`/`inspect`/`related`/`context` all verified working
+   against it, including a cross-language `context` capsule (Go + TypeScript results together for
+   one task).
+5. Next up, per the deferred list above: C#/Python extractors (Phase 3b/3c), then the daemon +
+   incremental indexing + file watcher (Phase 3d) — prioritized by real usage feedback, not by
+   continuing to iterate on ranker constants against one synthetic fixture.

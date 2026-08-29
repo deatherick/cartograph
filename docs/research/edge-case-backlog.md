@@ -58,6 +58,18 @@ reference is their issue number, kept as traceability for where the case came fr
 | C13 | **Prototype/schema-method assignment** (`X.methods.foo = function(){}`) — found missing entirely against a real repo (11 Mongoose model methods in one file, all invisible); fixed same session, see ADR-0004 | real-repo validation, ADR-0004 |
 | C14 | **`this.method()` single-level call** (no intermediate member) — the most common call shape in OOP-style code; found entirely uncaptured against a real repo, fixed same session, see ADR-0004 | real-repo validation, ADR-0004 |
 
+## J. Go (Phase 3a — done, ADR-0010)
+
+| # | Case | Origin | Phase |
+|---|---|---|---|
+| J1 | A package spans every file in one directory, not one file — qualified names, same-name resolution, and receiver-type lookup must all work across sibling files | real self-hosting run | 3a (closed) |
+| J2 | A local function-valued binding (closure, callback parameter, func-typed `var`) called bare must be `ScopeLocal`, never resolved against the same-file/same-package/builtin tiers — the first extractor to actually emit the `ScopeLocal` case B4 already described | found self-hosting: `internal/exclude`'s `fn` callback, the recursive `walk` closure pattern in both this project's own extractors | 3a (closed) |
+| J3 | Struct embedding (anonymous field) grants promoted fields/methods — modeled as `RefExtends`, the closest fit in the fixed edge taxonomy | Go spec | 3a (closed) |
+| J4 | Implicit interface satisfaction (no `implements` keyword) cannot be detected without real type-checking — a permanent, structural gap, not a missing feature | Go spec | 3a (documented, permanent) |
+| J5 | A two-level selector call (`r.field.Method()`) needs its own query pattern — the outer call's function field is itself a selector expression, not a bare identifier | found self-hosting, same shape as TypeScript's `this.member.method()` (edge-case-backlog.md's C14 story) | 3a (closed) |
+| J6 | A local variable's function type inferred from a multi-return call's second value (`ctx, cancel := context.WithTimeout(...)`) is not detected — only a syntactic func literal or annotation is | found self-hosting: `cmd/ctx/main.go` | 3a (documented gap) |
+| J7 | A struct field typed from another package via `pkg.Type` produces no receiver-type signal — only bare `type_identifier` fields do | design scoping, ADR-0010 | 3a (documented gap) |
+
 ## D. C# (Phase 3)
 
 | # | Case | Origin |

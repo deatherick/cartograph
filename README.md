@@ -8,12 +8,13 @@ alike. The idea: `grep` → read file → `grep` → read 8 more files → guess
 discover the duplicate later becomes graph → ranked context capsule → 2-3 targeted reads →
 grep to verify.
 
-**Status**: Phase 2 complete — TypeScript extraction/resolution, the Context Compiler, and an
-MCP server are all built, tested, and measured against a real coding agent (see
-[`docs/MVP.md`](docs/MVP.md) for the full picture and [`docs/adr/`](docs/adr/) for how every
-decision was made). Functional via CLI and MCP today. Not yet daemonized, not yet
-multi-language — see the [known limitations](#known-limitations) below before you rely on it
-for anything beyond TypeScript.
+**Status**: MVP shipped (Phase 2) plus Go support (Phase 3a) — TypeScript and Go extraction/
+resolution, the Context Compiler, and an MCP server are all built, tested, and measured against
+both a real coding agent (ADR-0009) and this project's own real Go source (ADR-0010: 0.1%
+bug_rate self-hosting on Cartograph's own ~9,500-line codebase). See [`docs/MVP.md`](docs/MVP.md)
+for the full picture and [`docs/adr/`](docs/adr/) for how every decision was made. Functional via
+CLI and MCP today. Not yet daemonized, and C#/Python are still ahead — see the
+[known limitations](#known-limitations) below.
 
 ## Prerequisites
 
@@ -66,15 +67,18 @@ Class      src/services/userService.ts#UserService  src/services/userService.ts:
 Test       tests/userService.test.ts#UserService    tests/userService.test.ts:5-29
 ```
 
-Now point it at a real repo instead:
+Now point it at a real repo instead — TypeScript or Go, same commands either way:
 
 ```bash
-./bin/ctx index ~/path/to/some/typescript/project
-./bin/ctx inspect ~/path/to/some/typescript/project SomeClassName
-./bin/ctx related ~/path/to/some/typescript/project SomeClassName --depth 2
-./bin/ctx source ~/path/to/some/typescript/project someFunctionName
-./bin/ctx context ~/path/to/some/typescript/project "add validation to the order flow" --budget 2500
+./bin/ctx index ~/path/to/some/project
+./bin/ctx inspect ~/path/to/some/project SomeClassOrStructName
+./bin/ctx related ~/path/to/some/project SomeClassOrStructName --depth 2
+./bin/ctx source ~/path/to/some/project someFunctionName
+./bin/ctx context ~/path/to/some/project "add validation to the order flow" --budget 2500
 ```
+
+Cartograph indexes its own source this way too — `./bin/ctx index ~/code/cartograph` runs clean
+at 0.1% bug_rate ([ADR-0010](docs/adr/0010-go-extractor-and-self-hosting.md)).
 
 `context` is the Context Compiler — the actual point of this project: instead of a bare entity
 lookup, it ranks everything relevant to the task description and returns a token-budgeted
@@ -117,7 +121,10 @@ agent actually used it (a real bug was found and fixed).
 
 The honest list, kept current in [`docs/MVP.md`](docs/MVP.md#consolidated-known-issues-not-blocking-mvp-but-should-not-be-forgotten):
 
-- **TypeScript/JavaScript only.** Go, C#, Python are designed for but not built (Phase 3).
+- **TypeScript/JavaScript and Go.** C# and Python are designed for but not built yet (Phase 3b/3c).
+- **Go's implicit interface satisfaction (no `implements` keyword) cannot be detected** — needs
+  real type-checking, not tree-sitter queries; a permanent gap, not a missing feature
+  ([ADR-0010](docs/adr/0010-go-extractor-and-self-hosting.md)).
 - **No staleness detection.** Editing source after `ctx index` silently serves the old snapshot
   until you re-index — no watcher/daemon yet.
 - **No fuzzy/full-text search.** `find`/`inspect`/`related`/`source` need an exact bare name or

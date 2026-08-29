@@ -32,6 +32,8 @@ import (
 // same-file resolution), its import table (for import-table resolution),
 // and its owner-scoped methods (for the receiver-type tier).
 type fileEntry struct {
+	lang     model.Lang
+	dir      string // repo-relative directory, used for Go's same-package tier
 	entities []model.Entity
 	byName   map[string][]model.EntityID // bare name -> entities defined in THIS file
 	imports  []model.ImportBinding
@@ -70,6 +72,18 @@ type Index struct {
 	// (starts with ".") or an external package, exactly as before this
 	// existed.
 	tsconfig TSConfig
+	// goModule is the Go module path from go.mod (e.g.
+	// "github.com/deatherick/cartograph"), used to map an import path to a
+	// repo-relative directory — Go's analog of TSConfig's baseUrl/paths.
+	// Empty disables Go import resolution (every Go import then resolves as
+	// external, never internal).
+	goModule string
+	// filesByDir groups every registered file's key by its repo-relative
+	// directory — the unit a Go package actually is (one or more files, one
+	// directory), unlike TypeScript's one-module-per-file model. Populated
+	// in AddFile, consulted by the Go same-package resolution tier and by
+	// findExportedEntityGo.
+	filesByDir map[string][]string
 }
 
 // TSConfig is the subset of tsconfig.json's compilerOptions the resolver
@@ -92,6 +106,7 @@ func NewIndex(repo string) *Index {
 		repo:       repo,
 		files:      map[string]*fileEntry{},
 		byBareName: map[string][]model.EntityID{},
+		filesByDir: map[string][]string{},
 	}
 }
 
@@ -101,17 +116,30 @@ func (idx *Index) SetTSConfig(cfg TSConfig) {
 	idx.tsconfig = cfg
 }
 
+// SetGoModule installs the Go module path (from go.mod) used to map an
+// import path to a repo-relative directory. Optional — call before Resolve
+// if the repo has a go.mod; without it, every Go import resolves as
+// external (correctly conservative: an import cannot be presumed internal
+// without knowing the module path it would have to match).
+func (idx *Index) SetGoModule(modulePath string) {
+	idx.goModule = modulePath
+}
+
 // AddFile registers one file's extracted facts. Must be called for every
 // file before Resolve — the resolver has no notion of incremental
 // per-file resolution yet (that arrives with Phase 3's incremental index).
 func (idx *Index) AddFile(facts *model.FileFacts) {
+	dir := path.Dir(facts.File)
 	fe := &fileEntry{
+		lang:           facts.Lang,
+		dir:            dir,
 		entities:       facts.Entities,
 		byName:         map[string][]model.EntityID{},
 		imports:        facts.Imports,
 		reExports:      facts.ReExports,
 		methodsByOwner: map[string]map[string]model.EntityID{},
 	}
+	idx.filesByDir[dir] = append(idx.filesByDir[dir], facts.File)
 	for _, e := range facts.Entities {
 		// KindTest entities are named from a STRING LITERAL argument
 		// (`describe("UserService", ...)`) — never a real language
@@ -207,6 +235,14 @@ func (idx *Index) resolveQualified(file string, fe *fileEntry, ref model.Ref, ki
 			if im.LocalName != ref.Target.Name || !im.IsNamespace {
 				continue
 			}
+			if fe.lang == model.LangGo {
+				// Every Go import is namespace-style (see
+				// internal/parser/golang's importFromMatch doc) and Go
+				// packages span a directory, not a single file — resolved
+				// via the module-path mapping, not TS's relative-path +
+				// extension-candidate scheme.
+				return idx.resolveGoQualifiedImport(ref, im, kind)
+			}
 			targetFile, found := idx.resolveImportPath(file, im.Source)
 			if !found {
 				return externalDisposition(im.Source)
@@ -300,6 +336,28 @@ func (idx *Index) resolveByReceiverType(file string, fe *fileEntry, receiverType
 			return id, true
 		}
 	}
+	if fe.lang == model.LangGo {
+		// Go's struct/method split across sibling files in one package
+		// directory (unlike TypeScript, where a class and its methods are
+		// always in the same file) — receiverType may be declared in a
+		// DIFFERENT file of the same package, never reached via fe's own
+		// methodsByOwner nor via an import (there is none: same-package
+		// references are never imported in Go).
+		for _, siblingFile := range idx.filesByDir[fe.dir] {
+			if siblingFile == file {
+				continue // already checked via fe.methodsByOwner above
+			}
+			sibling := idx.files[siblingFile]
+			if sibling == nil {
+				continue
+			}
+			if byMethod, ok := sibling.methodsByOwner[receiverType]; ok {
+				if id, ok := byMethod[member]; ok {
+					return id, true
+				}
+			}
+		}
+	}
 	for _, im := range fe.imports {
 		if im.LocalName != receiverType || im.IsNamespace {
 			continue
@@ -337,6 +395,16 @@ func (idx *Index) resolveUnqualified(file string, fe *fileEntry, ref model.Ref, 
 		}
 	}
 
+	// Tier 1.5 (Go only): same-package. A Go package spans every file in
+	// one directory — an unqualified reference to a sibling file's
+	// declaration is the normal, common case (unlike TypeScript, where
+	// every file is its own module and this tier does not exist).
+	if fe != nil && fe.lang == model.LangGo {
+		if id, ok := idx.findExportedEntityGo(fe.dir, name); ok {
+			return resolvedEdge(ref.Src, kind, id, 0.95, model.ProvenanceDeterministic, "same-package declaration")
+		}
+	}
+
 	// Tier 2: import table.
 	if fe != nil {
 		for _, im := range fe.imports {
@@ -364,16 +432,49 @@ func (idx *Index) resolveUnqualified(file string, fe *fileEntry, ref model.Ref, 
 		}
 	}
 
-	// Tier 3: known globals/stdlib (console, Promise, Array, ...) — not a
-	// bare-name allowlist entry, a fixed list of runtime builtins that
-	// exist in every TS/JS file and would otherwise flood bug_rate.
-	if knownGlobals[name] {
+	// Tier 3: known globals/builtins — a fixed list of identifiers that
+	// exist in every file of the language and would otherwise flood
+	// bug_rate. Go's predeclared identifiers (len, make, panic, error, ...)
+	// are a disjoint list from TS/JS's runtime globals (console, Promise,
+	// ...); which one applies is decided by the file's language, not the
+	// name's spelling — the two lists happen to share zero entries today,
+	// but that is not guaranteed to stay true forever.
+	isGo := fe != nil && fe.lang == model.LangGo
+	if isGo && goBuiltins[name] {
+		return model.ResolvedRef{Disposition: model.DispositionExternalKnown, Reason: "Go predeclared identifier"}
+	}
+	if !isGo && knownGlobals[name] {
 		return model.ResolvedRef{Disposition: model.DispositionExternalKnown, Reason: "known JS/TS runtime global"}
 	}
 
-	// Tier 4: bare-name allowlist policy (docs/research/03). Whitelisting,
-	// never blacklisting: a name is bound bare ONLY if explicitly
-	// allowlisted, regardless of how many repo-wide candidates exist.
+	if isGo {
+		// Go has no bare-name allowlist tier: unlike TypeScript/JavaScript,
+		// where an unqualified identifier CAN legitimately be an implicit
+		// global with no local declaration, Go's static resolution rules
+		// mean a bare identifier used as a call target must be either a
+		// predeclared builtin (just checked above) or declared somewhere
+		// in the current package (same-file/same-package tiers, already
+		// tried above) — there is no third option short of a rare dot
+		// import (a documented, deliberately unsupported gap; see
+		// internal/parser/golang's import.stmt query doc). Reaching here
+		// therefore means the extractor missed a real declaration, not
+		// that the name is "presumed external" the way TS/JS treats an
+		// unresolved bare name.
+		if candidates := idx.byBareName[name]; len(candidates) > 0 {
+			// The name exists somewhere in the repo, just not in this
+			// package — evidence for a human/agent to look at, not a
+			// confident bind (docs/research/03's "never guess" rule).
+			return model.ResolvedRef{Disposition: model.DispositionAmbiguous, Candidates: candidates,
+				Reason: fmt.Sprintf("bare name %q not found in this package; %d repo-wide candidate(s) elsewhere", name, len(candidates))}
+		}
+		return model.ResolvedRef{Disposition: model.DispositionBugExtractor,
+			Reason: fmt.Sprintf("bare Go identifier %q not found in this file, its package, the predeclared identifiers, or anywhere else in the repo — Go's static resolution rules mean this should not be possible unless the extractor missed a declaration (or this is a rare dot-import, an unsupported gap)", name)}
+	}
+
+	// Tier 4 (TS/JS only): bare-name allowlist policy (docs/research/03).
+	// Whitelisting, never blacklisting: a name is bound bare ONLY if
+	// explicitly allowlisted, regardless of how many repo-wide candidates
+	// exist.
 	candidates := idx.byBareName[name]
 	if bareNameAllowlist[name] && len(candidates) == 1 {
 		return resolvedEdge(ref.Src, kind, candidates[0], 0.7, model.ProvenanceInferred, "bare-name allowlist match")
@@ -436,6 +537,96 @@ func externalDisposition(source string) model.ResolvedRef {
 		return model.ResolvedRef{Disposition: model.DispositionExternalKnown, Reason: fmt.Sprintf("known external package %q", source)}
 	}
 	return model.ResolvedRef{Disposition: model.DispositionExternalUnknown, Reason: fmt.Sprintf("unrecognized external package %q", source)}
+}
+
+// resolveGoQualifiedImport resolves a package-qualified Go call/type-use
+// (`pkg.Member`) through im, the import binding whose LocalName matched the
+// call's object identifier. Mirrors resolveQualified's TS namespace-import
+// branch, but against a Go package (a directory of files), not a single
+// resolved file.
+func (idx *Index) resolveGoQualifiedImport(ref model.Ref, im model.ImportBinding, kind model.EdgeKind) model.ResolvedRef {
+	dir, internal, found := idx.resolveGoImportPath(im.Source)
+	if !internal {
+		return goExternalDisposition(im.Source)
+	}
+	if !found {
+		return model.ResolvedRef{Disposition: model.DispositionBugExtractor,
+			Reason: fmt.Sprintf("go import %q is under this module but no indexed file was found in directory %q", im.Source, dir)}
+	}
+	if id, ok := idx.findExportedEntityGo(dir, ref.Target.Member); ok {
+		return resolvedEdge(ref.Src, kind, id, 0.95, model.ProvenanceDeterministic,
+			fmt.Sprintf("package import %s (%s), member %s", ref.Target.Name, im.Source, ref.Target.Member))
+	}
+	return model.ResolvedRef{Disposition: model.DispositionBugResolver,
+		Reason: fmt.Sprintf("package %s (%q) has no member %s (this extractor is not yet export-aware — an unexported name in that package would also report this)", ref.Target.Name, im.Source, ref.Target.Member)}
+}
+
+// resolveGoImportPath maps a Go import path to a repo-relative directory
+// using idx.goModule (from go.mod). internal reports whether importPath is
+// under this module at all (false for stdlib/third-party paths, which the
+// caller routes to goExternalDisposition instead); found reports whether
+// that directory actually has any indexed file (false is a strong bug
+// signal — an internal import that resolves to nothing this index walked).
+func (idx *Index) resolveGoImportPath(importPath string) (dir string, internal bool, found bool) {
+	if idx.goModule == "" {
+		return "", false, false
+	}
+	switch {
+	case importPath == idx.goModule:
+		dir = "."
+	case strings.HasPrefix(importPath, idx.goModule+"/"):
+		dir = strings.TrimPrefix(importPath, idx.goModule+"/")
+	default:
+		return "", false, false
+	}
+	_, found = idx.filesByDir[dir]
+	return dir, true, found
+}
+
+// findExportedEntityGo looks up name across every file in a Go package
+// directory — the unit Go actually resolves names within, unlike
+// TypeScript's per-file findExportedEntity. No re-export chasing: Go has no
+// barrel-file concept. Returns ok=false for zero or (in valid, compiling Go
+// source, which should not happen) more than one match, the same
+// conservative "don't guess" rule findExportedEntity follows.
+func (idx *Index) findExportedEntityGo(dir, name string) (model.EntityID, bool) {
+	var match model.EntityID
+	count := 0
+	for _, file := range idx.filesByDir[dir] {
+		fe := idx.files[file]
+		if fe == nil {
+			continue
+		}
+		for _, id := range fe.byName[name] {
+			match = id
+			count++
+		}
+	}
+	if count == 1 {
+		return match, true
+	}
+	return "", false
+}
+
+// goExternalDisposition classifies a Go import path that resolveGoImportPath
+// determined is NOT under this module. A first path segment with no dot is
+// Go's own convention for a standard-library import ("fmt", "encoding/json",
+// "net/http" — a real third-party path always starts with a domain like
+// "github.com"), so it is ExternalKnown without needing an allowlist entry;
+// anything else is checked against goKnownPackages (this project's own real
+// dependencies), else ExternalUnknown.
+func goExternalDisposition(importPath string) model.ResolvedRef {
+	first := importPath
+	if i := strings.IndexByte(importPath, '/'); i >= 0 {
+		first = importPath[:i]
+	}
+	if !strings.Contains(first, ".") {
+		return model.ResolvedRef{Disposition: model.DispositionExternalKnown, Reason: fmt.Sprintf("Go standard library package %q", importPath)}
+	}
+	if goKnownPackages[importPath] {
+		return model.ResolvedRef{Disposition: model.DispositionExternalKnown, Reason: fmt.Sprintf("known external Go package %q", importPath)}
+	}
+	return model.ResolvedRef{Disposition: model.DispositionExternalUnknown, Reason: fmt.Sprintf("unrecognized external Go package %q", importPath)}
 }
 
 // resolveImportPath maps an import source to a registered file key, trying

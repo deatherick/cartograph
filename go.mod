@@ -6,6 +6,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/tree-sitter/go-tree-sitter v0.25.0
+	github.com/tree-sitter/tree-sitter-go v0.25.0
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2
 )
 

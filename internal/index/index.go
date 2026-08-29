@@ -18,6 +18,7 @@ import (
 	"github.com/deatherick/cartograph/internal/graph"
 	"github.com/deatherick/cartograph/internal/model"
 	"github.com/deatherick/cartograph/internal/parser"
+	"github.com/deatherick/cartograph/internal/parser/golang"
 	"github.com/deatherick/cartograph/internal/parser/ts"
 	"github.com/deatherick/cartograph/internal/resolve"
 )
@@ -60,12 +61,17 @@ type Result struct {
 }
 
 // extractors maps a file extension to the extractor that handles it.
-// Adding csharp/python (Phase 3) is one entry each, not a rewrite.
+// Adding csharp/python (Phase 3, still to come) is one entry each, not a
+// rewrite — Go's own addition here is the proof of that claim.
 func extractors() map[string]parser.Extractor {
 	m := map[string]parser.Extractor{}
 	tsExt := ts.New()
 	for _, ext := range tsExt.Extensions() {
 		m[ext] = tsExt
+	}
+	goExt := golang.New()
+	for _, ext := range goExt.Extensions() {
+		m[ext] = goExt
 	}
 	return m
 }
@@ -114,6 +120,9 @@ func Run(ctx context.Context, root, repo string) (*Result, error) {
 	resolverIdx := resolve.NewIndex(repo)
 	if cfg, ok := loadTSConfig(root); ok {
 		resolverIdx.SetTSConfig(cfg)
+	}
+	if modulePath, ok := loadGoModule(root); ok {
+		resolverIdx.SetGoModule(modulePath)
 	}
 	for _, f := range allFacts {
 		resolverIdx.AddFile(f)

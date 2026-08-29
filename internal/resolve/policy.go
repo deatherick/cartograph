@@ -55,3 +55,49 @@ var knownPackages = map[string]bool{
 	"jsonwebtoken": true, "passport": true, "slugify": true,
 	"mongoose-unique-validator": true,
 }
+
+// goBuiltins is Go's predeclared identifier set (the spec's own fixed
+// list — https://go.dev/ref/spec#Predeclared_identifiers) — functions,
+// types, and constants available unqualified in every Go file with no
+// import. A bare reference to one of these is never a repo entity and must
+// not be flagged as a potential bug, exactly like knownGlobals for TS/JS,
+// but a disjoint list: Go's bare-identifier resolution rules are different
+// enough (see resolveUnqualified's Go branch) that reusing knownGlobals
+// would be semantically wrong even where a name might coincidentally match.
+var goBuiltins = map[string]bool{
+	// Functions.
+	"append": true, "cap": true, "clear": true, "close": true, "complex": true,
+	"copy": true, "delete": true, "imag": true, "len": true, "make": true,
+	"max": true, "min": true, "new": true, "panic": true, "print": true,
+	"println": true, "real": true, "recover": true,
+	// Types.
+	"any": true, "bool": true, "byte": true, "comparable": true, "complex64": true,
+	"complex128": true, "error": true, "float32": true, "float64": true,
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"rune": true, "string": true, "uint": true, "uint8": true, "uint16": true,
+	"uint32": true, "uint64": true, "uintptr": true,
+	// Constants and the zero value.
+	"true": true, "false": true, "iota": true, "nil": true,
+}
+
+// goKnownPackages is a starter allowlist of well-known Go module paths,
+// mirroring knownPackages for npm above. Starter list only — populated with
+// this project's own real dependencies (go.mod), grows as real repos surface
+// more, same discipline as bareNameAllowlist.
+//
+// Deliberately does NOT list this project's own parsing-library
+// dependencies (go-tree-sitter itself, and its per-language grammar
+// modules) by their literal import path — found while self-hosting
+// (docs/MVP.md's deferred-turned-done milestone): internal/parser's own
+// architecture-boundary test (architecture_test.go) greps the WHOLE repo's
+// TEXT (not just import declarations) for those exact path substrings, to
+// catch a leaked binding type (docs/adr's Grafel ADR-0023 story) — writing
+// either one out here, even as an inert map value never imported, trips
+// that grep as a false positive. Missing from this allowlist only means
+// those imports classify as ExternalUnknown instead of ExternalKnown when
+// resolving THIS repo's own source — cosmetic, not a bug_rate hit (only
+// BugExtractor/BugResolver count toward bug_rate; ExternalUnknown does not).
+var goKnownPackages = map[string]bool{
+	"github.com/modelcontextprotocol/go-sdk/mcp": true,
+	"github.com/pkoukk/tiktoken-go":              true,
+}

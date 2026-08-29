@@ -428,3 +428,156 @@ func TestResolve_BarrelReExport_CycleIsSafe(t *testing.T) {
 		t.Fatal("Resolve did not return within 2s — likely an infinite loop in barrel re-export following")
 	}
 }
+
+// goEntity mirrors entity() but sets Lang, which fileEntry.lang (and thus
+// every Go-specific resolution branch) actually reads.
+func goEntity(kind model.Kind, qualified, name string) model.Entity {
+	const repo = "repo"
+	return model.Entity{
+		ID:        model.NewEntityID(repo, kind, qualified, ""),
+		Kind:      kind,
+		Lang:      model.LangGo,
+		Repo:      repo,
+		Qualified: qualified,
+		Name:      name,
+	}
+}
+
+func TestResolve_Go_SamePackageAcrossFiles(t *testing.T) {
+	idx := NewIndex("repo")
+	// process is declared in a sibling file of the SAME package directory —
+	// TypeScript has no equivalent tier (every file is its own module
+	// there); Go's same-package tier is what makes this resolve.
+	helperEnt := goEntity(model.KindFunction, "internal/svc#process", "process")
+	helperFacts := &model.FileFacts{Lang: model.LangGo, File: "internal/svc/helper.go", Entities: []model.Entity{helperEnt}}
+	callerFacts := &model.FileFacts{
+		Lang: model.LangGo,
+		File: "internal/svc/service.go",
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "process"}},
+		},
+	}
+	idx.AddFile(helperFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected same-package resolution, got %+v", got)
+	}
+	if got[0].Edge.Dst != helperEnt.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, helperEnt.ID)
+	}
+}
+
+func TestResolve_Go_PackageQualifiedImport(t *testing.T) {
+	idx := NewIndex("repo")
+	idx.SetGoModule("example.com/m")
+
+	repoEnt := goEntity(model.KindFunction, "internal/repo#Validate", "Validate")
+	repoFacts := &model.FileFacts{Lang: model.LangGo, File: "internal/repo/repo.go", Entities: []model.Entity{repoEnt}}
+
+	callerFacts := &model.FileFacts{
+		Lang: model.LangGo,
+		File: "internal/svc/service.go",
+		Imports: []model.ImportBinding{
+			{LocalName: "repo", Source: "example.com/m/internal/repo", IsNamespace: true},
+		},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "repo", Member: "Validate"}},
+		},
+	}
+	idx.AddFile(repoFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected package-qualified resolution, got %+v", got)
+	}
+	if got[0].Edge.Dst != repoEnt.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, repoEnt.ID)
+	}
+}
+
+func TestResolve_Go_StdlibImport_IsExternalKnown_NotABug(t *testing.T) {
+	idx := NewIndex("repo")
+	idx.SetGoModule("example.com/m")
+
+	callerFacts := &model.FileFacts{
+		Lang: model.LangGo,
+		File: "internal/svc/service.go",
+		Imports: []model.ImportBinding{
+			{LocalName: "fmt", Source: "fmt", IsNamespace: true},
+		},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "fmt", Member: "Println"}},
+		},
+	}
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionExternalKnown {
+		t.Fatalf("expected ExternalKnown for a stdlib import, got %+v", got)
+	}
+}
+
+func TestResolve_Go_ReceiverTypeThroughStructField(t *testing.T) {
+	idx := NewIndex("repo")
+
+	depEnt := goEntity(model.KindMethod, "internal/svc#Dep.Greeting", "Greeting")
+	depFacts := &model.FileFacts{Lang: model.LangGo, File: "internal/svc/dep.go", Entities: []model.Entity{depEnt}}
+
+	callerFacts := &model.FileFacts{
+		Lang: model.LangGo,
+		File: "internal/svc/service.go",
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "dep", Member: "Greeting", ReceiverType: "Dep"}},
+		},
+	}
+	idx.AddFile(depFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected receiver-type resolution, got %+v", got)
+	}
+	if got[0].Edge.Dst != depEnt.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, depEnt.ID)
+	}
+}
+
+func TestResolve_Go_UnresolvedBareName_IsBugExtractorNotExternal(t *testing.T) {
+	// Unlike TypeScript, Go has no implicit unqualified globals — a bare
+	// call that isn't same-file, same-package, or a predeclared identifier
+	// signals a missed extraction, not a presumed-external reference.
+	idx := NewIndex("repo")
+	callerFacts := &model.FileFacts{
+		Lang: model.LangGo,
+		File: "internal/svc/service.go",
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "totallyMissingHelper"}},
+		},
+	}
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionBugExtractor {
+		t.Fatalf("expected BugExtractor, got %+v", got)
+	}
+}
+
+func TestResolve_Go_PredeclaredIdentifier_IsNotABug(t *testing.T) {
+	idx := NewIndex("repo")
+	callerFacts := &model.FileFacts{
+		Lang: model.LangGo,
+		File: "internal/svc/service.go",
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "make"}},
+		},
+	}
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionExternalKnown {
+		t.Fatalf("expected ExternalKnown for a Go predeclared identifier, got %+v", got)
+	}
+}
