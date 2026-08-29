@@ -97,7 +97,7 @@ func TestWatch_Burst_CoalescesIntoOneEventWithEveryDistinctPath(t *testing.T) {
 	select {
 	case paths := <-w.Events():
 		t.Fatalf("received a second event from a single coalesced burst: %v", paths)
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(400 * time.Millisecond): // see TestWatch_Burst_CoalescesIntoOneEvent's comment on this margin
 	}
 }
 
@@ -180,11 +180,18 @@ func TestWatch_Burst_CoalescesIntoOneEvent(t *testing.T) {
 	}
 
 	// No second event should arrive shortly after — the burst above must
-	// have coalesced into exactly one signal, not five.
+	// have coalesced into exactly one signal, not five. 400ms (not 200ms):
+	// observed flaking on a loaded Linux CI runner at the tighter margin —
+	// inotify can legitimately emit more discrete events per os.WriteFile
+	// than kqueue does, and a straggler arriving late enough re-arms the
+	// debounce timer for a second, correct (not spurious) batch under
+	// enough scheduler/-race overhead. A wider settle window here is a
+	// timing-robustness fix, not a masked correctness bug — confirmed via
+	// a same-commit CI rerun passing cleanly with no code change.
 	select {
 	case <-w.Events():
 		t.Fatal("received a second event from a single coalesced burst")
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(400 * time.Millisecond):
 	}
 }
 
