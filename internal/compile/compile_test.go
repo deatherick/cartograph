@@ -225,7 +225,7 @@ func TestMatchScore_DoesNotMatchFilePathPortion(t *testing.T) {
 	// the symbol path after "#", never the file path before it.
 	unrelated := model.Entity{Name: "helper", Qualified: "src/utils/validation.ts#helper"}
 	terms := tokenizeTask("add validation to placeOrder")
-	if score := matchScore(unrelated, terms); score != 0 {
+	if score := matchScore(unrelated, terms, nil); score != 0 {
 		t.Fatalf("expected zero match score for a symbol unrelated to \"validation\", coincidentally in validation.ts, got %.1f", score)
 	}
 
@@ -233,7 +233,43 @@ func TestMatchScore_DoesNotMatchFilePathPortion(t *testing.T) {
 	// it happens to live in) must still score — e.g. a class actually
 	// named ValidationError.
 	real := model.Entity{Name: "ValidationError", Qualified: "src/utils/validation.ts#ValidationError"}
-	if score := matchScore(real, terms); score == 0 {
+	if score := matchScore(real, terms, nil); score == 0 {
 		t.Fatal("expected a real symbol-name match to score above zero")
+	}
+}
+
+func TestTermWeights_RareTermWeighsMoreThanCommonTerm(t *testing.T) {
+	// "handler" appears in five entities' names; "punchcard" in exactly
+	// one. A task mentioning both should trust the rarer, more specific
+	// term far more than the generic one.
+	all := []model.Entity{
+		{Name: "orderHandler"}, {Name: "userHandler"}, {Name: "authHandler"},
+		{Name: "eventHandler"}, {Name: "errorHandler"},
+		{Name: "punchcardValidator"},
+	}
+	weights := termWeights(all, []string{"handler", "punchcard"})
+	if weights["punchcard"] <= weights["handler"] {
+		t.Fatalf("expected the rare term to weigh more: handler=%.3f punchcard=%.3f", weights["handler"], weights["punchcard"])
+	}
+}
+
+func TestMatchScore_RareTermMatchOutranksCommonTermMatch(t *testing.T) {
+	// Two entities each match exactly one term from the task — but one
+	// term ("handler") is generic across this repo and the other
+	// ("punchcard") is specific. The specific match should score higher,
+	// even though both are the same KIND of match (exact bare-name).
+	all := []model.Entity{
+		{Name: "orderHandler"}, {Name: "userHandler"}, {Name: "authHandler"},
+		{Name: "eventHandler"}, {Name: "errorHandler"},
+		{Name: "punchcardValidator"},
+	}
+	terms := []string{"handler", "punchcard"}
+	idf := termWeights(all, terms)
+
+	genericMatch := model.Entity{Name: "handler", Qualified: "a.ts#handler"}
+	specificMatch := model.Entity{Name: "punchcard", Qualified: "b.ts#punchcard"}
+
+	if matchScore(specificMatch, terms, idf) <= matchScore(genericMatch, terms, idf) {
+		t.Fatalf("expected the specific term's match to outscore the generic term's match")
 	}
 }

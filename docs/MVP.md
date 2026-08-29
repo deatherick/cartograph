@@ -143,8 +143,13 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
 - Dot imports (`. "pkg"`) are not resolved — a rare, discouraged Go idiom.
 
 ### Context Compiler (`internal/compile`)
-- Seeding is crude term-overlap (with camelCase splitting), not BM25/FTS5 — explicitly deferred
-  (ADR-0006's search-scope decision), a real ranking function is the natural next refinement.
+- Seeding is term-overlap (with camelCase splitting) **plus IDF term weighting** (a rare, specific
+  term counts for more than a generic one — `termWeights`), not full BM25/FTS5 — explicitly
+  deferred (ADR-0006's search-scope decision). Measured, not assumed: dampened to 40% strength
+  after full-strength IDF regressed the synthetic fixture below its exit criterion; the synthetic
+  fixture now passes at exactly 0.85 recall (the threshold itself), a thinner margin than before
+  this change — worth re-checking the next time seeding is touched. See
+  `docs/benchmarks/2026-08-29-idf-seeding.md`.
 - No centrality/PageRank term in scoring — `internal/graph`'s package doc already defers this;
   it would need pre-baked attributes at index time (a real, contained addition once useful).
 - No git-recency term — no git-metadata extraction exists yet (Phase 4 scope).
@@ -284,7 +289,10 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
     - ~~Object/schema-style `const` extraction~~ — done (item above, edge-case-backlog.md I11).
     - ~~Multi-project registry (CLI)~~ — done, ADR-0016: `internal/project` +
       `ctx project add/list/remove`, every command's `<path>` resolves a registered name first.
-    - Context Compiler seeding improvement — next.
+    - ~~Context Compiler seeding improvement~~ — done: IDF term weighting (dampened to 40%
+      strength after measuring full-strength regressed the synthetic fixture below its exit
+      criterion). Real repo recall 0.47→0.50; synthetic fixture recall 0.87→0.85 (still passing,
+      thinner margin — documented, not hidden). See `docs/benchmarks/2026-08-29-idf-seeding.md`.
 12. Next after that: the "easy win" Grafel-inspired surfaces identified but not yet built (Paths —
     shortest path between two entities, cheap given existing BFS infra; Quality — persisting and
     surfacing the `bug_rate`/disposition breakdown already computed at index time but not

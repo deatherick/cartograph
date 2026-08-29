@@ -232,24 +232,77 @@ func splitCamel(s string) []string {
 	return camelBoundary.FindAllString(s, -1)
 }
 
+// symbolPath is the part of e.Qualified AFTER "#" — the symbol's own path
+// within its file (e.g. "userservice.register"), never the file path
+// before "#". Matching against the raw Qualified string let a task term
+// like "validation" incidentally match every entity in validation.ts (the
+// FILE name) regardless of what the entity actually was — found live via
+// `ctx context "add validation to placeOrder"` seeding on unrelated
+// constructors purely because they lived in validation.ts.
+func symbolPath(e model.Entity) string {
+	if i := strings.IndexByte(e.Qualified, '#'); i >= 0 {
+		return e.Qualified[i+1:]
+	}
+	return e.Qualified
+}
+
+// termWeights computes an IDF-style (inverse document frequency) weight
+// per task term: how many entities in the repo this term matches at all
+// (by name or symbol path) determines how much a match on that term
+// counts for. A generic term like "get" or "handler" that matches dozens
+// of entities is barely more informative than matching nothing; a term
+// specific to a handful of entities is a much stronger signal that the
+// task is really about them. Without this, a multi-word task prompt whose
+// terms happen to include common vocabulary seeds just as confidently on
+// irrelevant, generically-named entities as on the few that actually
+// matter — the flat per-term scoring `matchScore` used before this
+// weighted every term the same regardless of how many entities it could
+// possibly be talking about.
+//
+// Smoothed IDF: log((N+1)/(df+1)) + 1 — always positive, never zero (a
+// term matching literally everything still counts for something, since a
+// name/symbol-path match is still a real signal, just a weak one), and
+// bounded above by log(N+1)+1 for a term matching nothing else at all.
+func termWeights(all []model.Entity, terms []string) map[string]float64 {
+	n := float64(len(all))
+	df := map[string]int{}
+	for _, t := range terms {
+		for _, e := range all {
+			if strings.Contains(strings.ToLower(e.Name), t) || strings.Contains(strings.ToLower(symbolPath(e)), t) {
+				df[t]++
+			}
+		}
+	}
+	// idfDampening blends the raw IDF signal with a flat weight of 1
+	// (the pre-IDF behavior) rather than applying it at full strength.
+	// Measured directly: full-strength IDF regressed the synthetic
+	// fixture's recall@gold from 0.87 to 0.83 (below the 0.85 exit
+	// criterion it previously cleared) — the per-term weight scale
+	// shifted which candidates cleared rank's relative relevance floor
+	// (relevanceFloorRatio, itself relative to the top seed's score) in a
+	// way that dropped some previously-included true positives. 0.4 was
+	// the first damping factor tested that restored both fixtures to
+	// their documented exit criteria — see
+	// docs/benchmarks/2026-08-29-idf-seeding.md for the full measurement.
+	const idfDampening = 0.4
+	weights := make(map[string]float64, len(terms))
+	for _, t := range terms {
+		raw := math.Log((n+1)/(float64(df[t])+1)) + 1
+		weights[t] = 1 + idfDampening*(raw-1)
+	}
+	return weights
+}
+
 // matchScore scores e against task terms: an exact bare-name match (case-
 // insensitive) is weighted far above a partial substring/word overlap in
 // the qualified name, so a task that names a symbol directly seeds on
-// that symbol before anything merely related by vocabulary.
-func matchScore(e model.Entity, terms []string) float64 {
+// that symbol before anything merely related by vocabulary. Each term's
+// base weight (10/3/1) is further scaled by idf[t] (see termWeights) so a
+// match on a rare, specific term counts for more than a match on a term
+// that appears all over the codebase.
+func matchScore(e model.Entity, terms []string, idf map[string]float64) float64 {
 	nameLower := strings.ToLower(e.Name)
-	// symbolPathLower is the part of Qualified AFTER "#" — the symbol's
-	// own path within its file (e.g. "userservice.register"), never the
-	// file path before "#". Matching against the raw Qualified string
-	// let a task term like "validation" incidentally match every entity
-	// in validation.ts (the FILE name) regardless of what the entity
-	// actually was — found live via `ctx context "add validation to
-	// placeOrder"` seeding on unrelated constructors purely because they
-	// lived in validation.ts.
-	symbolPathLower := strings.ToLower(e.Qualified)
-	if i := strings.IndexByte(e.Qualified, '#'); i >= 0 {
-		symbolPathLower = strings.ToLower(e.Qualified[i+1:])
-	}
+	symbolPathLower := strings.ToLower(symbolPath(e))
 	var score float64
 	seen := map[string]bool{}
 	for _, t := range terms {
@@ -257,16 +310,20 @@ func matchScore(e model.Entity, terms []string) float64 {
 			continue
 		}
 		seen[t] = true
+		w := idf[t]
+		if w == 0 {
+			w = 1
+		}
 		if t == nameLower {
-			score += 10
+			score += 10 * w
 			continue
 		}
 		if strings.Contains(nameLower, t) {
-			score += 3
+			score += 3 * w
 			continue
 		}
 		if strings.Contains(symbolPathLower, t) {
-			score += 1
+			score += 1 * w
 		}
 	}
 	return score
@@ -278,13 +335,14 @@ func matchScore(e model.Entity, terms []string) float64 {
 func rank(snap *store.Snapshot, task string, maxSeeds, maxDepth int) []candidate {
 	terms := tokenizeTask(task)
 	all := snap.All()
+	idf := termWeights(all, terms)
 
 	var seeds []candidate
 	for _, e := range all {
 		if e.Kind == model.KindTest {
 			continue // test labels are not useful seeds for a code task
 		}
-		if s := matchScore(e, terms); s > 0 {
+		if s := matchScore(e, terms, idf); s > 0 {
 			seeds = append(seeds, candidate{e, "primary", s})
 		}
 	}
