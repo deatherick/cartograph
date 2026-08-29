@@ -423,3 +423,42 @@ describe("UserService", () => {
 		}
 	}
 }
+
+// TestExtract_SchemaStyleConst mirrors the exact real-repo pattern
+// (typescript-node-express-realworld-example-app's user.model.ts) that
+// motivated edge-case-backlog.md I11: a Mongoose model exported as a plain
+// `const`, invisible to every other file that imports it before this fix.
+func TestExtract_SchemaStyleConst(t *testing.T) {
+	src := `
+import { model, Model, Schema } from "mongoose";
+
+const UserSchema = new Schema({ username: String });
+
+export const User: Model<IUserModel> = model<IUserModel>("User", UserSchema);
+
+export const Order = mongoose.model("Order", OrderSchema);
+
+function helper() {
+  const local = someFactory("not a top-level entity");
+  return local;
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "models/user.model.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]model.Kind{}
+	for _, ent := range facts.Entities {
+		kinds[ent.Name] = ent.Kind
+	}
+	if kinds["User"] != model.KindClass {
+		t.Errorf("expected User (bare factory call, generic type args) to be extracted as KindClass, got %+v", kinds)
+	}
+	if kinds["Order"] != model.KindClass {
+		t.Errorf("expected Order (qualified mongoose.model call) to be extracted as KindClass, got %+v", kinds)
+	}
+	if _, ok := kinds["local"]; ok {
+		t.Errorf("expected 'local' (inside a function body) to NOT be extracted as a top-level entity, got %+v", kinds)
+	}
+}

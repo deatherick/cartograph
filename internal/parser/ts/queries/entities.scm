@@ -51,6 +51,32 @@
     parameters: (formal_parameters) @entity.params
     body: (statement_block) @entity.body)) @entity.methodassign
 
+; Object/schema-style const declarations: `const User = model('User', UserSchema)`,
+; `export const User: Model<IUserModel> = model<IUserModel>('User', UserSchema)`.
+; Found missing entirely while validating against a real repo
+; (typescript-node-express-realworld-example-app): every Mongoose model in that
+; codebase is exported exactly this way — a plain `const` binding, never a class
+; — and with no entity for it, every OTHER file's import of `User` (the actual
+; domain type used everywhere) had nothing to resolve to, measured as the root
+; cause of that repo's Context Compiler recall gap (edge-case-backlog.md I11).
+; The `.` before the string argument anchors it as the factory call's FIRST
+; argument (`someFn('Name', ...)`), distinguishing this from an unrelated call
+; like `someFn(x, 'label')` where a string merely appears later in the argument
+; list. Two shapes: a bare factory name (`model(...)`) and a qualified one
+; (`mongoose.model(...)`) — both real, both seen in practice.
+(variable_declarator
+  name: (identifier) @entity.name
+  value: (call_expression
+    function: (identifier)
+    arguments: (arguments . (string (string_fragment))))) @entity.schemaconst
+
+(variable_declarator
+  name: (identifier) @entity.name
+  value: (call_expression
+    function: (member_expression
+      property: (property_identifier))
+    arguments: (arguments . (string (string_fragment))))) @entity.schemaconst
+
 ; Class heritage: `class X extends Y implements Z`
 (class_declaration
   name: (type_identifier) @entity.name

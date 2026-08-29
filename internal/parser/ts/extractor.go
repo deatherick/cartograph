@@ -225,6 +225,27 @@ func enclosingClassName(n *sitter.Node, src []byte) (string, bool) {
 	return "", false
 }
 
+// isModuleScope reports whether n (a variable_declarator's value node) sits
+// at the top level of the file — walking up finds only "transparent"
+// wrapper nodes (export_statement, lexical_declaration, variable_declarator,
+// the file's own program root) before reaching the root, never a
+// function/method/arrow body or a class body. Used to gate schema-style
+// const extraction: a factory call assigned to a LOCAL variable inside a
+// function is an ordinary local, not a module-level domain type other
+// files import.
+func isModuleScope(n *sitter.Node) bool {
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		switch p.Kind() {
+		case "function_declaration", "method_definition", "function_expression",
+			"arrow_function", "class_body", "class_declaration", "statement_block":
+			return false
+		case "program":
+			return true
+		}
+	}
+	return true
+}
+
 // enclosingClassStartByte is enclosingClassName's counterpart returning the
 // class_declaration's start byte instead of its name — the key
 // classByStartByte/classPropTypes are indexed by, so a property
@@ -280,6 +301,17 @@ func entityFromMatch(repo, file string, src []byte, m match) (model.Entity, mode
 		kind, node = model.KindTypeAlias, m.captures["entity.typealias"]
 	case m.captures["entity.methodassign"] != nil:
 		kind, node = model.KindMethod, m.captures["entity.methodassign"]
+	case m.captures["entity.schemaconst"] != nil:
+		// Only at module scope — a local `const result = fn('x')` inside a
+		// function body is an ordinary local variable, not a schema/model
+		// binding other files import and treat as a domain type. Without
+		// this guard, every string-first-argument factory call anywhere in
+		// the file (however deeply nested) would wrongly become a
+		// top-level indexed entity.
+		if !isModuleScope(m.captures["entity.schemaconst"]) {
+			return model.Entity{}, "", false
+		}
+		kind, node = model.KindClass, m.captures["entity.schemaconst"]
 	default:
 		return model.Entity{}, "", false
 	}

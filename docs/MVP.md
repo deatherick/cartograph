@@ -83,10 +83,16 @@ Organized by area, pulled from every ADR and code comment written so far — thi
 rediscover this later" list.
 
 ### Extraction (`internal/parser/ts`)
-- **Object/schema-style `const` declarations are never extracted as entities**
-  (`const User = model('User', UserSchema)`) — edge-case-backlog.md I11. Measured root cause of
-  the real-repo Context Compiler recall gap (0.47 vs 0.85 target). Highest-value single fix for
-  real-code recall; extends the existing `methodassign` pattern.
+- ~~Object/schema-style `const` declarations never extracted as entities~~ — **fixed**
+  (edge-case-backlog.md I11): `const User = model('User', UserSchema)` now extracts as `KindClass`,
+  module-scope only. Verified: real-repo resolved edges 9→14, `User`/`Article` now findable.
+  Measured honestly: this did NOT move the real-repo benchmark's aggregate recall@gold (still
+  0.47) — the two zero-recall tasks are route-file/auth concerns, a still-open, separate gap. See
+  `docs/benchmarks/2026-08-29-schemaconst-realworld-ts.md`.
+- **Real-repo Context Compiler recall gap (0.47 vs 0.85 target) remains open** — not caused by the
+  schema-const gap above (that was measured, not assumed). The two zero-recall tasks (pagination-
+  limit validation, auth-payload trust across routes) point at something in route-handler
+  extraction or seeding, not yet investigated.
 - `Entity.Signature` and `Entity.DocSummary` are never populated — the source ladder's
   signature/skeleton rungs read the first source line as a stand-in (`internal/compile`'s
   package doc). A real reconstructed signature string is better long-term.
