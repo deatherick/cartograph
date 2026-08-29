@@ -72,6 +72,35 @@ func TestService_Impact_TransitiveClosureAndCoveringTests(t *testing.T) {
 	}
 }
 
+func TestService_Stats_SurfacesPersistedBugRate(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "chain.ts"), []byte(impactFixtureSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := New()
+	repo := RepoName(root)
+	indexStats, err := svc.Index(t.Context(), root, repo)
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	stats, err := svc.Stats(root, repo)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.Files != indexStats.Files {
+		t.Errorf("Stats.Files = %d, want %d (the same count Index reported)", stats.Files, indexStats.Files)
+	}
+	if stats.BugRate != indexStats.BugRate() {
+		t.Errorf("Stats.BugRate = %v, want %v (persisted, not recomputed differently)", stats.BugRate, indexStats.BugRate())
+	}
+	for d, n := range indexStats.Dispositions {
+		if stats.Dispositions[d] != n {
+			t.Errorf("Stats.Dispositions[%s] = %d, want %d", d, stats.Dispositions[d], n)
+		}
+	}
+}
+
 func TestService_Path_FindsShortestChain(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "chain.ts"), []byte(impactFixtureSrc), 0o644); err != nil {

@@ -27,13 +27,22 @@ func IndexStats(s index.Stats) string {
 	fmt.Fprintf(&b, "resolved edges: %d\n", s.ResolvedEdges)
 	fmt.Fprintf(&b, "bug_rate:       %.1f%%\n", s.BugRate()*100)
 	fmt.Fprintf(&b, "duration:       %s\n", s.Duration)
+	writeDispositions(&b, s.Dispositions)
+	return b.String()
+}
+
+// writeDispositions renders a disposition breakdown in the canonical,
+// pipeline-stage order — the same order both IndexStats (run-time) and
+// Stats (persisted, see docs/adr/0017-persisted-quality-stats.md) show it
+// in, so a user sees the same shape whether they just ran `ctx index` or
+// are reading a snapshot from an earlier run.
+func writeDispositions(b *strings.Builder, dispositions map[model.Disposition]int) {
 	b.WriteString("dispositions:\n")
 	for _, d := range []string{"resolved", "external-known", "external-unknown", "dynamic", "ambiguous", "bug-extractor", "bug-resolver", "unimplemented", "unclassified"} {
-		if n, ok := s.Dispositions[model.Disposition(d)]; ok {
-			fmt.Fprintf(&b, "  %-18s %d\n", d, n)
+		if n, ok := dispositions[model.Disposition(d)]; ok {
+			fmt.Fprintf(b, "  %-18s %d\n", d, n)
 		}
 	}
-	return b.String()
 }
 
 // Capsule renders the token-dense capsule format the master plan
@@ -136,9 +145,17 @@ func Related(name string, depth int, related []model.RelatedEntity) string {
 	return b.String()
 }
 
-// Stats renders the lightweight snapshot summary (repo name, entity count).
+// Stats renders the snapshot summary: repo name, entity/file counts, and
+// the persisted bug_rate/disposition breakdown from the last `ctx index`
+// run (docs/adr/0017-persisted-quality-stats.md) — no reindex required.
 func Stats(s service.Stats) string {
-	return fmt.Sprintf("repo:     %s\nentities: %d\n", s.Repo, s.Entities)
+	var b strings.Builder
+	fmt.Fprintf(&b, "repo:     %s\n", s.Repo)
+	fmt.Fprintf(&b, "files:    %d\n", s.Files)
+	fmt.Fprintf(&b, "entities: %d\n", s.Entities)
+	fmt.Fprintf(&b, "bug_rate: %.1f%%\n", s.BugRate*100)
+	writeDispositions(&b, s.Dispositions)
+	return b.String()
 }
 
 // Impact renders one entity's blast radius: direct callers, the full

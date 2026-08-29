@@ -297,9 +297,13 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
     parent-pointer path reconstruction), wired through the full stack — `service.Path`, `ctx path
     <path> <fromName> <toName>` (CLI), `context_path` (MCP), `render.Path`. Verified with a real
     3-hop call chain fixture (service→service test) and end-to-end through MCP (mcpserver_test.go).
-13. Next after that: the remaining "easy win" Grafel-inspired surfaces (Quality — persisting and
-    surfacing the `bug_rate`/disposition breakdown already computed at index time but not
-    persisted; Operations — `ctxd`'s own watch/reindex status) — or, per the deferred list above,
-    C#/Python extractors (Phase 3b/3c), true per-file incremental indexing, the similarity/
-    duplicate engine (Phase 5), or the global-install/system-service work (Phase 9) — prioritized
-    by real usage feedback, not by continuing to iterate against one synthetic fixture.
+13. ~~Quality (persisted bug_rate/disposition breakdown)~~ — done, ADR-0017: snapshot format
+    bumped to version 2 to add a disposition section; `Snapshot.Files()/Dispositions()/BugRate()`
+    read it back with the exact same formula `index.Stats.BugRate()` uses; `ctx stats` and a new
+    `context_stats` MCP tool (there was no MCP equivalent of `ctx stats` before this) both surface
+    it without requiring a reindex.
+14. Next after that: the remaining "easy win" Grafel-inspired surface — Operations (`ctxd`'s own
+    watch/reindex status) — or, per the deferred list above, C#/Python extractors (Phase 3b/3c),
+    true per-file incremental indexing, the similarity/duplicate engine (Phase 5), or the
+    global-install/system-service work (Phase 9) — prioritized by real usage feedback, not by
+    continuing to iterate against one synthetic fixture.

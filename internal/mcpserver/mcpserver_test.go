@@ -169,6 +169,21 @@ func TestMCPServer_Impact(t *testing.T) {
 	}
 }
 
+func TestMCPServer_Stats(t *testing.T) {
+	cs := connect(t)
+	root := fixtureRoot(t)
+	callTool(t, cs, "context_index", map[string]any{"root": root})
+
+	res := callTool(t, cs, "context_stats", map[string]any{"root": root})
+	if res.IsError {
+		t.Fatalf("context_stats returned an error: %s", textOf(t, res))
+	}
+	text := textOf(t, res)
+	if !strings.Contains(text, "bug_rate") || !strings.Contains(text, "dispositions") {
+		t.Errorf("expected stats output to include bug_rate and dispositions, got: %s", text)
+	}
+}
+
 func TestMCPServer_Path(t *testing.T) {
 	cs := connect(t)
 	root := fixtureRoot(t)
@@ -253,6 +268,7 @@ func TestMCPServer_StructuredContentIsAlwaysAnObject(t *testing.T) {
 		{"context_compile", map[string]any{"root": root, "task": "UserService register", "budget": 500}},
 		{"context_impact", map[string]any{"root": root, "name": "UserService", "file": "services"}},
 		{"context_path", map[string]any{"root": root, "from": "UserService", "from_file": "services", "to": "UserService", "to_file": "services"}},
+		{"context_stats", map[string]any{"root": root}},
 	}
 	for _, c := range cases {
 		t.Run(c.tool, func(t *testing.T) {

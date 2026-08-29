@@ -15,15 +15,18 @@ import (
 // the ReadFile-not-mmap scoping decision — the whole file is resident in
 // data, and every accessor decodes fields on demand by indexing into it.
 type Snapshot struct {
-	Repo         string
-	data         []byte
-	stringsStart uint32
-	entityStart  int
-	outEdgeStart int
-	inEdgeStart  int
-	entityCount  int
-	outEdgeCount int
-	inEdgeCount  int
+	Repo             string
+	data             []byte
+	stringsStart     uint32
+	entityStart      int
+	outEdgeStart     int
+	inEdgeStart      int
+	dispositionStart int
+	entityCount      int
+	outEdgeCount     int
+	inEdgeCount      int
+	files            int
+	dispositionCount int
 }
 
 // Open reads and parses a snapshot written by Write.
@@ -44,25 +47,31 @@ func Open(path string) (*Snapshot, error) {
 	outEdgeCount := int(binary.LittleEndian.Uint32(data[16:20]))
 	inEdgeCount := int(binary.LittleEndian.Uint32(data[20:24]))
 	stringTableLen := int(binary.LittleEndian.Uint32(data[24:28]))
+	files := int(binary.LittleEndian.Uint32(data[28:32]))
+	dispositionCount := int(binary.LittleEndian.Uint32(data[32:36]))
 
 	stringsStart := headerSize
 	entityStart := stringsStart + stringTableLen
 	outEdgeStart := entityStart + entityCount*entityRecordSize
 	inEdgeStart := outEdgeStart + outEdgeCount*edgeRecordSize
-	wantLen := inEdgeStart + inEdgeCount*edgeRecordSize
+	dispositionStart := inEdgeStart + inEdgeCount*edgeRecordSize
+	wantLen := dispositionStart + dispositionCount*dispositionRecordSize
 	if len(data) < wantLen {
 		return nil, fmt.Errorf("store: snapshot truncated (have %d bytes, want at least %d)", len(data), wantLen)
 	}
 
 	s := &Snapshot{
-		data:         data,
-		stringsStart: uint32(stringsStart),
-		entityStart:  entityStart,
-		outEdgeStart: outEdgeStart,
-		inEdgeStart:  inEdgeStart,
-		entityCount:  entityCount,
-		outEdgeCount: outEdgeCount,
-		inEdgeCount:  inEdgeCount,
+		data:             data,
+		stringsStart:     uint32(stringsStart),
+		entityStart:      entityStart,
+		outEdgeStart:     outEdgeStart,
+		inEdgeStart:      inEdgeStart,
+		dispositionStart: dispositionStart,
+		entityCount:      entityCount,
+		outEdgeCount:     outEdgeCount,
+		inEdgeCount:      inEdgeCount,
+		files:            files,
+		dispositionCount: dispositionCount,
 	}
 	s.Repo = s.readString(repoOff)
 	return s, nil
@@ -143,6 +152,50 @@ func bytesCompare(a, b []byte) int {
 		}
 	}
 	return 0
+}
+
+// Files returns the number of source files the persisted index run walked
+// (Meta.Files at Write time) — the same count index.Stats.Files reported
+// when `ctx index` ran, now readable without rerunning it.
+func (s *Snapshot) Files() int {
+	return s.files
+}
+
+// Dispositions returns the persisted disposition breakdown (Meta.Dispositions
+// at Write time) — every ref the resolver classified, bucketed by outcome
+// (resolved, external-known, dynamic, ambiguous, bug-extractor, ...). See
+// docs/research/02-refs-and-dispositions.md and index.Stats, whose in-memory
+// shape this mirrors.
+func (s *Snapshot) Dispositions() map[model.Disposition]int {
+	out := make(map[model.Disposition]int, s.dispositionCount)
+	for i := 0; i < s.dispositionCount; i++ {
+		off := s.dispositionStart + i*dispositionRecordSize
+		rec := s.data[off : off+dispositionRecordSize]
+		d := model.Disposition(s.readString(binary.LittleEndian.Uint32(rec[0:4])))
+		out[d] = int(binary.LittleEndian.Uint32(rec[4:8]))
+	}
+	return out
+}
+
+// BugRate is (bug-extractor + bug-resolver) / total dispositions, computed
+// from the persisted breakdown — the same formula as index.Stats.BugRate,
+// now available on anything that has only a snapshot on disk, not the
+// index.Result that produced it. Returns 0 if there were no dispositions
+// recorded at all (an empty repo, or a snapshot from before format version
+// 2, not a claim of perfection).
+func (s *Snapshot) BugRate() float64 {
+	total := 0
+	bugs := 0
+	for d, n := range s.Dispositions() {
+		total += n
+		if d.IsBug() {
+			bugs += n
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(bugs) / float64(total)
 }
 
 // Lookup returns the entity with the given ID, if present.

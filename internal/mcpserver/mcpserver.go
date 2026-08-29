@@ -83,6 +83,14 @@ func New(svc *service.Service) *mcp.Server {
 	}, impactHandler(svc))
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "context_stats",
+		Description: "Summary counts for an already-indexed repository: entity/file counts and the " +
+			"persisted bug_rate/disposition breakdown from the last `ctx index` run — resolved vs. " +
+			"external vs. dynamic-by-design vs. an actual extractor/resolver bug, never one opaque " +
+			"percentage.",
+	}, statsHandler(svc))
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name: "context_path",
 		Description: "Shortest path (fewest graph hops) from one named entity to another — how does " +
 			"A reach B, following calls/uses/extends/implements in either direction.",
@@ -255,6 +263,20 @@ func impactHandler(svc *service.Service) mcp.ToolHandlerFor[impactArgs, impactRe
 			return errorResult[impactResult](err)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Impact(result)}}}, impactResult{Impact: &result}, nil
+	}
+}
+
+type statsArgs struct {
+	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+}
+
+func statsHandler(svc *service.Service) mcp.ToolHandlerFor[statsArgs, service.Stats] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args statsArgs) (*mcp.CallToolResult, service.Stats, error) {
+		stats, err := svc.Stats(args.Root, service.RepoName(args.Root))
+		if err != nil {
+			return errorResult[service.Stats](err)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Stats(stats)}}}, stats, nil
 	}
 }
 

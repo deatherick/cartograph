@@ -58,7 +58,8 @@ func (s *Service) Index(ctx context.Context, root, repo string) (index.Stats, er
 	if err != nil {
 		return index.Stats{}, fmt.Errorf("service: resolving snapshot path: %w", err)
 	}
-	if err := store.Write(path, repo, result.Graph); err != nil {
+	meta := store.Meta{Files: result.Stats.Files, Dispositions: result.Stats.Dispositions}
+	if err := store.Write(path, repo, result.Graph, meta); err != nil {
 		return index.Stats{}, fmt.Errorf("service: persisting snapshot: %w", err)
 	}
 	return result.Stats, nil
@@ -243,13 +244,17 @@ func (s *Service) Context(root, repo, task string, budget int, sessionID string)
 	return compile.Compile(root, repo, task, compile.Options{Budget: budget, SessionID: sessionID})
 }
 
-// Stats loads the persisted snapshot and returns summary counts — a
-// lighter-weight relative of Index's Stats (no disposition breakdown,
-// since that's a run-time resolver artifact not persisted in the
-// snapshot; see store/format.go for what is and isn't stored).
+// Stats loads the persisted snapshot and returns summary counts, including
+// the disposition breakdown and BugRate — since format version 2 (see
+// docs/adr/0017-persisted-quality-stats.md) these survive past the one
+// process that ran `ctx index`, so `ctx stats` can show them without
+// requiring a fresh reindex.
 type Stats struct {
-	Entities int
-	Repo     string
+	Entities     int
+	Repo         string
+	Files        int
+	Dispositions map[model.Disposition]int
+	BugRate      float64
 }
 
 // Stats returns summary counts from the persisted snapshot.
@@ -258,7 +263,13 @@ func (s *Service) Stats(root, repo string) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
-	return Stats{Entities: len(snap.All()), Repo: snap.Repo}, nil
+	return Stats{
+		Entities:     len(snap.All()),
+		Repo:         snap.Repo,
+		Files:        snap.Files(),
+		Dispositions: snap.Dispositions(),
+		BugRate:      snap.BugRate(),
+	}, nil
 }
 
 // Graph is the whole persisted graph — every entity and every edge — the

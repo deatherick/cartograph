@@ -35,7 +35,7 @@ func TestWriteOpen_RoundTrip(t *testing.T) {
 	g, aID, bID := buildTestGraph()
 	path := filepath.Join(t.TempDir(), "graph.bin")
 
-	if err := Write(path, "test-repo", g); err != nil {
+	if err := Write(path, "test-repo", g, Meta{}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -110,7 +110,7 @@ func TestOpen_CorruptFile(t *testing.T) {
 func TestRelated_TraversesAcrossSnapshotBoundary(t *testing.T) {
 	g, aID, bID := buildTestGraph()
 	path := filepath.Join(t.TempDir(), "graph.bin")
-	if err := Write(path, "test-repo", g); err != nil {
+	if err := Write(path, "test-repo", g, Meta{}); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := Open(path)
@@ -129,7 +129,7 @@ func TestUpstream_OnlyFollowsIncomingEdges(t *testing.T) {
 	// which would find b from either direction.
 	g, aID, bID := buildTestGraph()
 	path := filepath.Join(t.TempDir(), "graph.bin")
-	if err := Write(path, "test-repo", g); err != nil {
+	if err := Write(path, "test-repo", g, Meta{}); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := Open(path)
@@ -158,7 +158,7 @@ func TestUpstream_UnlimitedDepthFollowsFullChain(t *testing.T) {
 	g.AddEdge(model.Edge{ID: "e1", Src: b.ID, Dst: a.ID, Kind: model.EdgeCalls, Provenance: model.ProvenanceDeterministic})
 	g.AddEdge(model.Edge{ID: "e2", Src: c.ID, Dst: b.ID, Kind: model.EdgeCalls, Provenance: model.ProvenanceDeterministic})
 	path := filepath.Join(t.TempDir(), "graph.bin")
-	if err := Write(path, "test-repo", g); err != nil {
+	if err := Write(path, "test-repo", g, Meta{}); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := Open(path)
@@ -201,7 +201,7 @@ func TestShortestPath_FindsMultiHopPath(t *testing.T) {
 	g.AddEdge(model.Edge{ID: "e2", Src: c.ID, Dst: b.ID, Kind: model.EdgeCalls, Provenance: model.ProvenanceDeterministic})
 	g.AddEdge(model.Edge{ID: "e3", Src: d.ID, Dst: c.ID, Kind: model.EdgeCalls, Provenance: model.ProvenanceDeterministic})
 	path := filepath.Join(t.TempDir(), "graph.bin")
-	if err := Write(path, "test-repo", g); err != nil {
+	if err := Write(path, "test-repo", g, Meta{}); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := Open(path)
@@ -234,7 +234,7 @@ func TestShortestPath_NoPath_ReturnsFalse(t *testing.T) {
 	g.AddEntity(a)
 	g.AddEntity(isolated)
 	path := filepath.Join(t.TempDir(), "graph.bin")
-	if err := Write(path, "test-repo", g); err != nil {
+	if err := Write(path, "test-repo", g, Meta{}); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := Open(path)
@@ -249,7 +249,7 @@ func TestShortestPath_NoPath_ReturnsFalse(t *testing.T) {
 func TestShortestPath_SameEntity_ReturnsFalse(t *testing.T) {
 	g, aID, _ := buildTestGraph()
 	path := filepath.Join(t.TempDir(), "graph.bin")
-	if err := Write(path, "test-repo", g); err != nil {
+	if err := Write(path, "test-repo", g, Meta{}); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := Open(path)
@@ -258,6 +258,74 @@ func TestShortestPath_SameEntity_ReturnsFalse(t *testing.T) {
 	}
 	if _, ok := snap.ShortestPath(aID, aID); ok {
 		t.Fatal("expected ok=false for start == target (not a real path)")
+	}
+}
+
+func TestWriteOpen_PersistsFilesAndDispositions(t *testing.T) {
+	g := graph.New()
+	a := model.Entity{ID: model.NewEntityID("repo", model.KindFunction, "a.ts#a", "arity:0"), Kind: model.KindFunction, Name: "a"}
+	g.AddEntity(a)
+
+	meta := Meta{
+		Files: 3,
+		Dispositions: map[model.Disposition]int{
+			model.DispositionResolved:      8,
+			model.DispositionExternalKnown: 1,
+			model.DispositionBugExtractor:  1,
+		},
+	}
+	path := filepath.Join(t.TempDir(), "graph.bin")
+	if err := Write(path, "test-repo", g, meta); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := snap.Files(); got != 3 {
+		t.Errorf("Files() = %d, want 3", got)
+	}
+	got := snap.Dispositions()
+	if len(got) != 3 {
+		t.Fatalf("expected 3 disposition entries, got %+v", got)
+	}
+	if got[model.DispositionResolved] != 8 {
+		t.Errorf("Dispositions()[resolved] = %d, want 8", got[model.DispositionResolved])
+	}
+	if got[model.DispositionExternalKnown] != 1 {
+		t.Errorf("Dispositions()[external-known] = %d, want 1", got[model.DispositionExternalKnown])
+	}
+	if got[model.DispositionBugExtractor] != 1 {
+		t.Errorf("Dispositions()[bug-extractor] = %d, want 1", got[model.DispositionBugExtractor])
+	}
+
+	// bug_rate = bug-extractor / total = 1/10 = 0.1, matching index.Stats.BugRate's formula.
+	if wantRate := 0.1; snap.BugRate() < wantRate-0.0001 || snap.BugRate() > wantRate+0.0001 {
+		t.Errorf("BugRate() = %v, want %v", snap.BugRate(), wantRate)
+	}
+}
+
+func TestWriteOpen_EmptyMeta_YieldsZeroFilesAndBugRate(t *testing.T) {
+	g := graph.New()
+	a := model.Entity{ID: model.NewEntityID("repo", model.KindFunction, "a.ts#a", "arity:0"), Kind: model.KindFunction, Name: "a"}
+	g.AddEntity(a)
+	path := filepath.Join(t.TempDir(), "graph.bin")
+	if err := Write(path, "test-repo", g, Meta{}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snap.Files(); got != 0 {
+		t.Errorf("Files() = %d, want 0", got)
+	}
+	if got := snap.Dispositions(); len(got) != 0 {
+		t.Errorf("expected no disposition entries, got %+v", got)
+	}
+	if got := snap.BugRate(); got != 0 {
+		t.Errorf("BugRate() = %v, want 0", got)
 	}
 }
 
@@ -271,7 +339,7 @@ func TestWrite_DanglingEdgeDropped(t *testing.T) {
 	g.AddEdge(model.Edge{Src: a.ID, Dst: model.NewEntityID("repo", model.KindFunction, "ghost.ts#ghost", "arity:0"), Kind: model.EdgeCalls})
 
 	path := filepath.Join(t.TempDir(), "graph.bin")
-	if err := Write(path, "test-repo", g); err != nil {
+	if err := Write(path, "test-repo", g, Meta{}); err != nil {
 		t.Fatalf("Write should not fail on a dangling edge: %v", err)
 	}
 	snap, err := Open(path)

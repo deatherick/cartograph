@@ -81,7 +81,7 @@ Usage:
   ctx inspect <path> <name>     full detail on one entity: signature, fan-in, fan-out
   ctx related <path> <name> [--depth N]   entities within N hops (reads snapshot)
   ctx source <path> <name>      print the entity's source lines
-  ctx stats <path>              print snapshot summary (reads snapshot)
+  ctx stats <path>              print snapshot summary: entities, files, bug_rate, dispositions
   ctx impact <path> <name> [--depth N] [--file <substring>]   blast radius: what depends on this
   ctx impact <path> --git-diff [ref]   blast radius of every entity a git diff touched (default: HEAD)
   ctx path <path> <fromName> <toName> [--from-file <sub>] [--to-file <sub>]   shortest path between two entities

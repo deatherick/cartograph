@@ -26,7 +26,7 @@ package store
 
 const (
 	magic         = "CGF1" // Cartograph Graph, format 1
-	formatVersion = uint32(1)
+	formatVersion = uint32(2)
 
 	idSize = 8 // EntityID is 16 hex chars = 8 raw bytes
 
@@ -65,9 +65,18 @@ const (
 	//   EvidenceOff uint32
 	edgeRecordSize = 5 * 4 // 20 bytes
 
+	// dispositionRecordSize is one (model.Disposition, count) pair — the
+	// disposition breakdown bug_rate is computed from (see index.Stats,
+	// whose in-memory shape this mirrors), persisted since format version 2
+	// so it survives past the one process that ran `ctx index` instead of
+	// being recomputed-and-discarded every run.
+	//   KindOff uint32  -- string table offset for the disposition string
+	//   Count   uint32
+	dispositionRecordSize = 2 * 4 // 8 bytes
+
 	// headerSize: magic(4) + version(4) + repoOff(4) + entityCount(4) +
-	// outEdgeCount(4) + inEdgeCount(4) + stringTableLen(4) = 28 bytes,
-	// followed by the string table, then entities, then out-edges, then
-	// in-edges.
-	headerSize = 4 + 4 + 4 + 4 + 4 + 4 + 4
+	// outEdgeCount(4) + inEdgeCount(4) + stringTableLen(4) + filesCount(4) +
+	// dispositionCount(4) = 36 bytes, followed by the string table, then
+	// entities, then out-edges, then in-edges, then disposition records.
+	headerSize = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4
 )

@@ -235,7 +235,8 @@ func runCapsuleMode(fixtureDir string, ts *taskSet, budget int) ([]capsuleResult
 	if err != nil {
 		return nil, err
 	}
-	if err := store.Write(snapPath, ts.Fixture, result.Graph); err != nil {
+	meta := store.Meta{Files: result.Stats.Files, Dispositions: result.Stats.Dispositions}
+	if err := store.Write(snapPath, ts.Fixture, result.Graph, meta); err != nil {
 		return nil, fmt.Errorf("writing snapshot: %w", err)
 	}
 

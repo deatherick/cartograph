@@ -38,11 +38,21 @@ func (t *stringTable) intern(s string) uint32 {
 	return off
 }
 
+// Meta is the run-level bookkeeping persisted alongside the graph itself —
+// today, just enough to reconstruct BugRate later without recomputing an
+// index (see index.Stats, whose in-memory shape this mirrors and whose
+// Files/Dispositions fields are its natural source at the one call site,
+// service.Index).
+type Meta struct {
+	Files        int
+	Dispositions map[model.Disposition]int
+}
+
 // Write builds a snapshot of g for repo and writes it atomically to path
 // (temp file + rename, so a reader never observes a partial write — the
 // same handoff pattern docs/research/08-process-architecture-and-residuals.md
 // documents adopting from Grafel's ADR-0024).
-func Write(path, repo string, g *graph.Graph) error {
+func Write(path, repo string, g *graph.Graph, meta Meta) error {
 	entities := make([]model.Entity, 0, len(g.Entities))
 	for _, e := range g.Entities {
 		entities = append(entities, e)
@@ -138,6 +148,26 @@ func Write(path, repo string, g *graph.Graph) error {
 		entityRecords = append(entityRecords, rec...)
 	}
 
+	// Disposition records are written after the string table is otherwise
+	// finalized by everything above, but string interning is idempotent
+	// (newStringTable.intern returns the existing offset for a repeat
+	// value), so appending more to st.buf here is safe — the disposition
+	// strings just extend the same table any of them may already share
+	// entries with (e.g. an EdgeKind string never collides with a
+	// Disposition string, but interning doesn't care either way).
+	dispositionKinds := make([]model.Disposition, 0, len(meta.Dispositions))
+	for d := range meta.Dispositions {
+		dispositionKinds = append(dispositionKinds, d)
+	}
+	sort.Slice(dispositionKinds, func(i, j int) bool { return dispositionKinds[i] < dispositionKinds[j] })
+	dispositionRecords := make([]byte, 0, len(dispositionKinds)*dispositionRecordSize)
+	for _, d := range dispositionKinds {
+		rec := make([]byte, dispositionRecordSize)
+		binary.LittleEndian.PutUint32(rec[0:4], st.intern(string(d)))
+		binary.LittleEndian.PutUint32(rec[4:8], uint32(meta.Dispositions[d]))
+		dispositionRecords = append(dispositionRecords, rec...)
+	}
+
 	header := make([]byte, headerSize)
 	copy(header[0:4], magic)
 	binary.LittleEndian.PutUint32(header[4:8], formatVersion)
@@ -147,13 +177,16 @@ func Write(path, repo string, g *graph.Graph) error {
 	binary.LittleEndian.PutUint32(header[16:20], uint32(len(outEdges)/edgeRecordSize))
 	binary.LittleEndian.PutUint32(header[20:24], uint32(len(inEdges)/edgeRecordSize))
 	binary.LittleEndian.PutUint32(header[24:28], uint32(len(st.buf)))
+	binary.LittleEndian.PutUint32(header[28:32], uint32(meta.Files))
+	binary.LittleEndian.PutUint32(header[32:36], uint32(len(dispositionKinds)))
 
-	full := make([]byte, 0, headerSize+len(st.buf)+len(entityRecords)+len(outEdges)+len(inEdges))
+	full := make([]byte, 0, headerSize+len(st.buf)+len(entityRecords)+len(outEdges)+len(inEdges)+len(dispositionRecords))
 	full = append(full, header...)
 	full = append(full, st.buf...)
 	full = append(full, entityRecords...)
 	full = append(full, outEdges...)
 	full = append(full, inEdges...)
+	full = append(full, dispositionRecords...)
 
 	return writeAtomic(path, full)
 }

@@ -36,7 +36,8 @@ func setupSnapshot(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Write(path, "ts-basic", result.Graph); err != nil {
+	meta := store.Meta{Files: result.Stats.Files, Dispositions: result.Stats.Dispositions}
+	if err := store.Write(path, "ts-basic", result.Graph, meta); err != nil {
 		t.Fatal(err)
 	}
 	return root
