@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/deatherick/cartograph/internal/httpserver"
+	"github.com/deatherick/cartograph/internal/opstatus"
 	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
 	"github.com/deatherick/cartograph/internal/watch"
@@ -57,11 +58,12 @@ func main() {
 	root := args[0]
 	svc := service.New()
 	repo := service.RepoName(root)
+	ops := opstatus.New()
 
 	if *webAddr != "" {
 		go func() {
-			handler := httpserver.New(svc, root, repo)
-			fmt.Printf("ctxd: web UI at http://%s\n", *webAddr)
+			handler := httpserver.New(svc, root, repo, ops)
+			fmt.Printf("ctxd: web UI at http://%s (operational status: /api/operations)\n", *webAddr)
 			if err := http.ListenAndServe(*webAddr, handler); err != nil { //nolint:gosec // 127.0.0.1 default binding is the security boundary here, not timeouts on a local single-user dev tool
 				fmt.Fprintf(os.Stderr, "ctxd: web UI server error: %v\n", err)
 			}
@@ -75,8 +77,10 @@ func main() {
 		stats, err := svc.Index(ctx, root, repo)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ctxd: index error: %v\n", err)
+			ops.RecordReindexFailure(reason, err)
 			return
 		}
+		ops.RecordReindexSuccess(reason, stats)
 		fmt.Print(render.IndexStats(stats))
 	}
 
@@ -88,6 +92,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = w.Close() }()
+	ops.SetWatching(true)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -99,8 +104,10 @@ func main() {
 			reindex("change detected")
 		case werr := <-w.Errors():
 			fmt.Fprintf(os.Stderr, "ctxd: watch error: %v\n", werr)
+			ops.RecordWatchError(werr)
 		case <-sig:
 			fmt.Println("ctxd: shutting down")
+			ops.SetWatching(false)
 			return
 		}
 	}

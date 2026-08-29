@@ -26,6 +26,7 @@ import (
 	"strconv"
 
 	"github.com/deatherick/cartograph/internal/model"
+	"github.com/deatherick/cartograph/internal/opstatus"
 	"github.com/deatherick/cartograph/internal/service"
 )
 
@@ -34,8 +35,15 @@ var webFS embed.FS
 
 // New builds the HTTP handler: the embedded static frontend at "/", and
 // its JSON API under "/api/". root/repo are fixed for the lifetime of the
-// handler — see the package doc's V0 scope note.
-func New(svc *service.Service, root, repo string) http.Handler {
+// handler — see the package doc's V0 scope note. ops is optional (nil is
+// fine, e.g. from a caller with no daemon lifecycle to report, such as
+// this package's own tests) — when nil, /api/operations reports 404
+// rather than serving empty/fake data. This is the one deliberate
+// exception to the package doc's "every handler calls straight into
+// internal/service" rule: ops.Snapshot() is daemon lifecycle state
+// (internal/opstatus), not product data internal/service knows about —
+// see ADR-0018.
+func New(svc *service.Service, root, repo string, ops *opstatus.Tracker) http.Handler {
 	mux := http.NewServeMux()
 
 	static, err := fs.Sub(webFS, "web")
@@ -167,6 +175,14 @@ func New(svc *service.Service, root, repo string) http.Handler {
 			Entity model.Entity `json:"entity"`
 			Source string       `json:"source"`
 		}{Entity: entity, Source: src})
+	})
+
+	mux.HandleFunc("/api/operations", func(w http.ResponseWriter, r *http.Request) {
+		if ops == nil {
+			http.Error(w, "operations status not available (no daemon running)", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, ops.Snapshot())
 	})
 
 	return mux

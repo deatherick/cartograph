@@ -302,8 +302,17 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
     read it back with the exact same formula `index.Stats.BugRate()` uses; `ctx stats` and a new
     `context_stats` MCP tool (there was no MCP equivalent of `ctx stats` before this) both surface
     it without requiring a reindex.
-14. Next after that: the remaining "easy win" Grafel-inspired surface — Operations (`ctxd`'s own
-    watch/reindex status) — or, per the deferred list above, C#/Python extractors (Phase 3b/3c),
-    true per-file incremental indexing, the similarity/duplicate engine (Phase 5), or the
+14. ~~Operations (`ctxd`'s own watch/reindex status)~~ — done, ADR-0018: `internal/opstatus.Tracker`
+    (daemon lifecycle state — started-at, watching, reindex count/reason/stats/error — deliberately
+    separate from `internal/service`, which answers "what does the snapshot say" from any process,
+    not "is this specific running daemon healthy"), surfaced at `/api/operations` through the
+    existing HTTP adapter (`ctxd --web`), 404 when no daemon is behind it. Not yet a CLI command or
+    a Web UI panel — both real, low-cost follow-ups, not bundled in to keep the change reviewable.
+
+This closes every item in the weighted "easy win" batch (Paths, Quality, Operations — ADR-0016/
+0017/0018) picked alongside the user in item 11 above.
+
+15. Next after that, per the deferred list above: C#/Python extractors (Phase 3b/3c), true
+    per-file incremental indexing, the similarity/duplicate engine (Phase 5), or the
     global-install/system-service work (Phase 9) — prioritized by real usage feedback, not by
     continuing to iterate against one synthetic fixture.

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/deatherick/cartograph/internal/model"
+	"github.com/deatherick/cartograph/internal/opstatus"
 	"github.com/deatherick/cartograph/internal/service"
 )
 
@@ -28,7 +29,7 @@ func setup(t *testing.T) *httptest.Server {
 	if _, err := svc.Index(t.Context(), root, repo); err != nil {
 		t.Fatalf("Index: %v", err)
 	}
-	return httptest.NewServer(New(svc, root, repo))
+	return httptest.NewServer(New(svc, root, repo, nil))
 }
 
 func TestHTTPServer_Stats(t *testing.T) {
@@ -208,13 +209,70 @@ func TestHTTPServer_ServesEmbeddedFrontend(t *testing.T) {
 	}
 }
 
+func TestHTTPServer_Operations_NilTracker_Returns404(t *testing.T) {
+	srv := setup(t) // setup passes nil for ops
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404 when no opstatus.Tracker was supplied", res.StatusCode)
+	}
+}
+
+func TestHTTPServer_Operations_WithTracker_ReportsStatus(t *testing.T) {
+	root := t.TempDir()
+	src := "export function helper(): string { return 'hi'; }\n"
+	if err := os.WriteFile(filepath.Join(root, "a.ts"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := service.New()
+	repo := service.RepoName(root)
+	stats, err := svc.Index(t.Context(), root, repo)
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	ops := opstatus.New()
+	ops.SetWatching(true)
+	ops.RecordReindexSuccess("initial index", stats)
+
+	srv := httptest.NewServer(New(svc, root, repo, ops))
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", res.StatusCode)
+	}
+	var got opstatus.Status
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Watching {
+		t.Error("expected Watching=true")
+	}
+	if got.ReindexCount != 1 {
+		t.Errorf("ReindexCount = %d, want 1", got.ReindexCount)
+	}
+	if got.LastReason != "initial index" {
+		t.Errorf("LastReason = %q, want %q", got.LastReason, "initial index")
+	}
+}
+
 // TestHTTPServer_MissingIndex_ReturnsClearError confirms the "run ctx
 // index first" contract survives through HTTP, not just the CLI/MCP
 // paths — a project with no snapshot yet must not panic or 500.
 func TestHTTPServer_MissingIndex_ReturnsClearError(t *testing.T) {
 	root := t.TempDir()
 	svc := service.New()
-	srv := httptest.NewServer(New(svc, root, service.RepoName(root)))
+	srv := httptest.NewServer(New(svc, root, service.RepoName(root), nil))
 	defer srv.Close()
 
 	res, err := http.Get(srv.URL + "/api/stats")
