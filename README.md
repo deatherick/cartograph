@@ -11,6 +11,7 @@ Status: early scaffolding (Phase 0b). Not yet functional.
 - `docs/research/` — discovery notes on Grafel (MIT, studied as reference, not copied)
 - `docs/adr/` — architecture decision records for this project
 - `docs/benchmarks/` — frozen `ctxbench` baseline results per phase, for comparing across phases
+- `docs/requirements/` — user requirements captured ahead of the phase that will implement them
 - `cmd/ctxbench/` — token-economy benchmark harness (the metric the project is measured against)
 
 See the project plan for the full phased roadmap.
