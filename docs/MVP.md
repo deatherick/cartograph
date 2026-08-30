@@ -89,10 +89,20 @@ rediscover this later" list.
   Measured honestly: this did NOT move the real-repo benchmark's aggregate recall@gold (still
   0.47) — the two zero-recall tasks are route-file/auth concerns, a still-open, separate gap. See
   `docs/benchmarks/2026-08-29-schemaconst-realworld-ts.md`.
-- **Real-repo Context Compiler recall gap (0.47 vs 0.85 target) remains open** — not caused by the
-  schema-const gap above (that was measured, not assumed). The two zero-recall tasks (pagination-
-  limit validation, auth-payload trust across routes) point at something in route-handler
-  extraction or seeding, not yet investigated.
+- ~~Route-handler extraction gap (the two real-repo zero-recall tasks)~~ — **investigated and
+  partially fixed**, ADR-0022: those tasks' gold files (Express route files) were producing ZERO
+  entities at all — every route handler is an anonymous callback with no declared name, a query
+  pattern this extractor had no case for. Now extracted as real `KindFunction` entities, name
+  synthesized from HTTP verb+path plus every `req.<x>.<field>` the handler reads. One of the two
+  tasks (R10) now passes; real-repo average recall@gold moved 0.50 -> 0.62. The other (R07) is
+  still open — its gold entity now exists and scores correctly, but doesn't reach the ranker's
+  default top-5 seeds; two ranker-side fixes were built, measured, and explicitly REJECTED because
+  each regressed the synthetic fixture's recall below its own exit criterion (see ADR-0022 and
+  `docs/benchmarks/2026-08-29-route-handler-extraction.md` for the full account — a real ranking
+  function, not another patch to substring matching, is what R07 actually needs).
+- **Real-repo Context Compiler recall gap (0.62 vs 0.85 target) remains open** — see above; this
+  is now understood as a seeding/ranking limitation (substring matching on common words), not an
+  extraction gap.
 - `Entity.Signature` and `Entity.DocSummary` are never populated — the source ladder's
   signature/skeleton rungs read the first source line as a stand-in (`internal/compile`'s
   package doc). A real reconstructed signature string is better long-term.
@@ -366,8 +376,18 @@ This closes every item in the weighted "easy win" batch (Paths, Quality, Operati
     Honestly narrower than the full ask (no AST tree-edit distance, no renamed-identifier
     normalization, a 24-pair eval vs. the master plan's ≥120): measured precision 1.00 / recall
     0.50 on that smaller set, reported as measured.
-18. Next after that, per the deferred list above: C#/Python extractors (Phase 3b/3c), the
-    global-install/system-service work (Phase 9), or deepening the Similarity Engine (AST tree-edit
-    distance, identifier normalization, a larger labeled eval set, Web UI/Context Compiler
-    integration) — prioritized by real usage feedback, not by continuing to iterate against one
-    synthetic fixture.
+18. ~~Route/event handler extraction (the real-repo Context Compiler recall gap)~~ — done, partial,
+    ADR-0022, at the user's explicit request to close this before moving to language additions:
+    Express-style `obj.method('string', ...middlewares, handler)` registrations (previously
+    invisible — zero entities from an entire route file) now extract as real `KindFunction`
+    entities. Real-repo recall@gold 0.50 -> 0.62 (R10 fixed, R07 still open — needs a real ranking
+    function, not another patch to substring matching; two such patches were tried, measured, and
+    explicitly rejected for regressing the synthetic fixture below 0.85). Synthetic fixture
+    unchanged (still exactly 0.85, its own exit criterion, untouched by this work).
+19. Next after that, per the deferred list above: C#/Python extractors (Phase 3b/3c) — for each
+    new language, download a real open-source example project to index and validate against (the
+    same "find real gaps against real code" methodology this ADR and the schema-const/route-
+    handler fixes both used, not synthetic fixtures alone) — the global-install/system-service
+    work (Phase 9), or deepening the Similarity Engine (AST tree-edit distance, identifier
+    normalization, a larger labeled eval set, Web UI/Context Compiler integration) — prioritized by
+    real usage feedback.

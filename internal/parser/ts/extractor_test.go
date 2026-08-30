@@ -2,6 +2,7 @@ package ts
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/deatherick/cartograph/internal/model"
@@ -460,5 +461,120 @@ function helper() {
 	}
 	if _, ok := kinds["local"]; ok {
 		t.Errorf("expected 'local' (inside a function body) to NOT be extracted as a top-level entity, got %+v", kinds)
+	}
+}
+
+// routeSample mirrors the real shape found missing entirely while
+// validating against typescript-node-express-realworld-example-app
+// (docs/adr/0022-route-handler-extraction.md): a route file with no
+// declared function/class of its own, every handler an anonymous
+// callback, middleware in between the path and the handler, and both
+// function_expression and arrow_function handler shapes.
+const routeSample = `
+import { Router } from "express";
+const router: Router = Router();
+
+router.get('/', authentication.optional, function (req, res, next) {
+  const limit = req.query.limit;
+  Article.findOne({ id: limit }).then(function (article) {
+    res.json(article);
+  });
+});
+
+router.post('/login', function (req, res) {
+  const email = req.body.email;
+  res.json(email);
+});
+
+router.param('article', (req, res, next, slug) => {
+  next();
+});
+`
+
+func TestExtract_RouteHandler_ExtractedAsFunctionEntity(t *testing.T) {
+	e := New()
+	facts, err := e.Extract(context.Background(), "test-repo", "src/routes/articles-routes.ts", []byte(routeSample))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	names := map[string]bool{}
+	for _, ent := range facts.Entities {
+		if ent.Kind == model.KindFunction {
+			names[ent.Name] = true
+		}
+	}
+	// The GET handler's real input names (req.query.limit) are folded
+	// into its synthesized name — see routeEntityFromMatch's doc.
+	if !names["GET / (limit)"] {
+		t.Errorf("expected a Function entity named %q, got %+v", "GET / (limit)", names)
+	}
+	if !names["POST /login (email)"] {
+		t.Errorf("expected a Function entity named %q (arrow-vs-function-expression handler shape doesn't matter, both extract), got %+v", "POST /login (email)", names)
+	}
+	// router.param has a string first arg + function last arg too — same
+	// shape, no HTTP-verb allowlist required (routeEntityFromMatch is
+	// deliberately generic).
+	foundParam := false
+	for n := range names {
+		if strings.HasPrefix(n, "PARAM article") {
+			foundParam = true
+		}
+	}
+	if !foundParam {
+		t.Errorf("expected router.param('article', ...) to also extract as a route entity, got %+v", names)
+	}
+}
+
+func TestExtract_RouteHandler_InnerCallsAttributeToItAsSrc(t *testing.T) {
+	// Article.findOne(...) is called INSIDE the GET handler — it must be
+	// attributed to that handler entity's ID, not left at module scope
+	// (Src == ""), the same scope-registration correctness
+	// TestExtract_MongooseSchemaMethodAssignment already checks for
+	// methodassign.
+	e := New()
+	facts, err := e.Extract(context.Background(), "test-repo", "src/routes/articles-routes.ts", []byte(routeSample))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var handlerID model.EntityID
+	for _, ent := range facts.Entities {
+		if ent.Name == "GET / (limit)" {
+			handlerID = ent.ID
+		}
+	}
+	if handlerID == "" {
+		t.Fatal("expected to find the GET / (limit) entity first")
+	}
+	found := false
+	for _, r := range facts.Refs {
+		if r.Target.Name == "Article" && r.Target.Member == "findOne" && r.Src == handlerID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected Article.findOne inside the handler to attribute Src=%s, refs: %+v", handlerID, facts.Refs)
+	}
+}
+
+func TestExtract_NonRouteMemberCall_NotExtractedAsRoute(t *testing.T) {
+	// A member call whose LAST argument isn't a function at all (the
+	// overwhelmingly common case — most method calls in real code) must
+	// never spuriously match the route pattern.
+	e := New()
+	src := `
+export function helper() {
+  console.log('just a message', 42);
+  someObject.doThing('a string arg', anotherVar);
+}
+`
+	facts, err := e.Extract(context.Background(), "test-repo", "a.ts", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	for _, ent := range facts.Entities {
+		if ent.Kind == model.KindFunction && ent.Name != "helper" {
+			t.Errorf("expected no spurious route entity, got %+v", ent)
+		}
 	}
 }

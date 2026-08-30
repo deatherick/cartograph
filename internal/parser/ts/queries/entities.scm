@@ -77,6 +77,35 @@
       property: (property_identifier))
     arguments: (arguments . (string (string_fragment))))) @entity.schemaconst
 
+; Express-style route registration: `router.get('/', authentication.optional,
+; function (req, res, next) {...})`, or an arrow-function handler. Found
+; missing entirely while validating against the same real repo
+; (typescript-node-express-realworld-example-app): every route file there
+; registers routes exactly this way, with all the real application logic
+; living in an ANONYMOUS callback with no declared name of its own —
+; before this, such a file produced ZERO entities at all, measured as the
+; direct cause of a Context Compiler recall=0 on two real tasks whose gold
+; file was exactly this kind of route file (edge-case-backlog.md, ADR
+; TODO). The handler itself becomes the entity (routeEntityFromMatch
+; synthesizes its name from the HTTP verb + path, since there is no
+; identifier to use); middleware arguments between the path and the
+; handler (`authentication.optional`, etc.) are skipped via `(_)*` —
+; only the first (path) and last (handler) argument positions are
+; anchored, so this matches regardless of how many middlewares sit
+; between them.
+(call_expression
+  function: (member_expression
+    object: (identifier) @route.receiver
+    property: (property_identifier) @route.verb)
+  arguments: (arguments
+    . (string (string_fragment) @route.path)
+    (_)*
+    .
+    [
+      (function_expression body: (statement_block)) @route.handler
+      (arrow_function body: (statement_block)) @route.handler
+    ])) @route.call
+
 ; Class heritage: `class X extends Y implements Z`
 (class_declaration
   name: (type_identifier) @entity.name

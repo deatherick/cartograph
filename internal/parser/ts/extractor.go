@@ -13,11 +13,12 @@ package ts
 
 import (
 	"context"
-	_ "embed"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
@@ -124,6 +125,16 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 
 		ent, id, ok := entityFromMatch(repo, file, src, m)
 		if !ok {
+			// routeEntityFromMatch is tried here, in the FIRST pass, not
+			// alongside testEntityFromMatch's second pass below — its
+			// entity must already be in scopeByStartByte before
+			// refsFromMatch runs (second pass), or a call INSIDE the
+			// handler (`Article.findOne(...)`) would never attribute to
+			// it as Ref.Src.
+			if rent, rid, rok := routeEntityFromMatch(repo, file, src, m); rok {
+				facts.Entities = append(facts.Entities, rent)
+				scopeByStartByte[rent.Anchor.StartByte] = rid
+			}
 			continue
 		}
 		facts.Entities = append(facts.Entities, ent)
@@ -581,11 +592,107 @@ func testEntityFromMatch(repo, file string, src []byte, m match) (model.Entity, 
 	}, true
 }
 
-// anchorKey gives KindTest entities a disambiguator — test names are not
-// guaranteed unique within a file (e.g. two `it('works', ...)` under
-// different `describe` blocks), and KindTest is not in Kind.overloadable's
-// arity-based scheme (tests have no meaningful "arity"). The call site's
-// own byte offset is a simple, always-available tiebreaker.
+// routeEntityFromMatch recognizes an Express-style route/event
+// registration (queries/entities.scm's route.call pattern doc) and turns
+// its trailing callback into a real KindFunction entity. Deliberately
+// generic, not Express-specific: ANY `obj.method('name', ...middlewares,
+// handler)` call matches (the query itself carries no allowlist of
+// receiver/verb names) — this also covers `emitter.on('error', ...)` and
+// similar registration-style APIs uniformly, the same "don't maintain a
+// per-framework name list" choice methodassign/schemaconst already make.
+// Called from the FIRST capture pass (not alongside testEntityFromMatch),
+// so its scope registration (the caller's job) is in place before
+// refsFromMatch's second pass attributes calls made INSIDE the handler.
+//
+// Name is synthesized from the verb + path/event name (e.g. "GET /articles"),
+// since there is no declared identifier to use — found missing entirely
+// while validating against a real repo
+// (typescript-node-express-realworld-example-app): every route file there
+// registers routes exactly this way, and before this, such a file produced
+// ZERO entities at all, the direct cause of a measured Context Compiler
+// recall=0 on two real tasks whose gold file was exactly this kind of
+// route file (docs/adr/0022-route-handler-extraction.md).
+func routeEntityFromMatch(repo, file string, src []byte, m match) (model.Entity, model.EntityID, bool) {
+	verb := m.captures["route.verb"]
+	path := m.captures["route.path"]
+	handler := m.captures["route.handler"]
+	if verb == nil || path == nil || handler == nil {
+		return model.Entity{}, "", false
+	}
+	name := strings.ToUpper(text(src, verb)) + " " + text(src, path)
+	if fields := reqAccessedFields(handler, src); len(fields) > 0 {
+		// Folded into the entity's own Name (never the ranker: matchScore
+		// deliberately never matches file paths, see symbolPath's doc for
+		// the false-positive class that caused) — a route handler's name
+		// is otherwise just its HTTP verb+path, carrying none of the
+		// business vocabulary ("pagination", "the article's slug") a task
+		// prompt would actually use. Its real input names
+		// (req.query.limit, req.body.email, ...) are exactly that
+		// vocabulary, already present in the code, not invented.
+		name += " (" + strings.Join(fields, ", ") + ")"
+	}
+	qualified := file + "#" + name
+	// KindFunction is overloadable (model.go) and expects a disambiguator;
+	// the handler's own call-site byte offset (anchorKey, shared with
+	// KindTest) reliably separates two routes that coincidentally
+	// synthesize the same verb+path name.
+	id := model.NewEntityID(repo, model.KindFunction, qualified, anchorKey(handler))
+	return model.Entity{
+		ID:        id,
+		Kind:      model.KindFunction,
+		Lang:      model.LangTS,
+		Repo:      repo,
+		Qualified: qualified,
+		Name:      name,
+		Anchor:    anchorFrom(file, src, handler),
+	}, id, true
+}
+
+// reqAccessedFields walks handler's subtree collecting every fieldName
+// in an Express request-input access — `req.<segment>.<fieldName>`
+// (req.query.limit, req.body.email, req.params.id, ...) — deduplicated
+// and sorted for a deterministic name (routeEntityFromMatch's doc
+// explains why this matters: giving the entity's synthesized Name real
+// business vocabulary to seed on, since a route handler otherwise has
+// none). A handler with no such access (reads nothing from req, or
+// reads it a way this simple two-level shape doesn't cover) returns nil
+// — the entity's name is just its verb+path in that case, same as before
+// this existed.
+func reqAccessedFields(handler *sitter.Node, src []byte) []string {
+	seen := map[string]bool{}
+	var walk func(*sitter.Node)
+	walk = func(cur *sitter.Node) {
+		if cur.Kind() == "member_expression" {
+			if obj := cur.ChildByFieldName("object"); obj != nil && obj.Kind() == "member_expression" {
+				if innerObj := obj.ChildByFieldName("object"); innerObj != nil && innerObj.Kind() == "identifier" && text(src, innerObj) == "req" {
+					if prop := cur.ChildByFieldName("property"); prop != nil {
+						seen[text(src, prop)] = true
+					}
+				}
+			}
+		}
+		cursor := cur.Walk()
+		defer cursor.Close()
+		for _, c := range cur.Children(cursor) {
+			walk(&c)
+		}
+	}
+	walk(handler)
+	out := make([]string, 0, len(seen))
+	for f := range seen {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// anchorKey gives an entity synthesized from a call site (not a real
+// declaration) a disambiguator based on that call site's own byte offset
+// — used by both KindTest (test names are not guaranteed unique within a
+// file, e.g. two `it('works', ...)` under different `describe` blocks,
+// and KindTest has no meaningful "arity") and routeEntityFromMatch's
+// KindFunction handlers (which ARE in Kind.overloadable's arity-based
+// scheme, but a synthesized verb+path name has no natural arity either).
 func anchorKey(n *sitter.Node) string {
 	sb, _ := n.ByteRange()
 	return fmt.Sprintf("byte:%d", sb)
