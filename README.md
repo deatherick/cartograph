@@ -92,7 +92,15 @@ UI — one index, one graph, one `context` capsule spanning both):
 ./bin/ctx impact ~/path/to/some/project SomeFunctionName   # blast radius: what depends on this
 ./bin/ctx impact ~/path/to/some/project --git-diff         # blast radius of your uncommitted changes
 ./bin/ctx path ~/path/to/some/project FunctionA FunctionB  # shortest chain from A to B
+./bin/ctx duplicates ~/path/to/some/project                 # undecided duplicate/similarity pairs
+./bin/ctx similar ~/path/to/some/project someFunctionName   # candidates involving one entity
+./bin/ctx decide ~/path/to/some/project fnA fnB same-pattern  # record a human decision on a pair
 ```
+
+`duplicates`/`similar` ([ADR-0021](docs/adr/0021-similarity-duplicate-engine.md)) score every
+candidate on multiple dimensions (never one opaque number) and never tell you what to do about
+it — `decide` records your own call (`ignore`, `intentional`, `same-pattern`,
+`should-share-abstraction`, `false-positive`) so a reviewed pair stops resurfacing.
 
 Cartograph indexes its own source this way too — `./bin/ctx index ~/code/cartograph` runs clean
 at 0.1% bug_rate ([ADR-0010](docs/adr/0010-go-extractor-and-self-hosting.md)).

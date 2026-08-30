@@ -21,6 +21,7 @@ import (
 	"github.com/deatherick/cartograph/internal/gitdiff"
 	"github.com/deatherick/cartograph/internal/index"
 	"github.com/deatherick/cartograph/internal/model"
+	"github.com/deatherick/cartograph/internal/similar"
 	"github.com/deatherick/cartograph/internal/srcread"
 	"github.com/deatherick/cartograph/internal/store"
 )
@@ -415,4 +416,136 @@ func (s *Service) ImpactFromGitDiff(root, repo, gitRef string, maxDepth int) (Gi
 		}
 	}
 	return out, nil
+}
+
+// decisionsPath resolves the per-repo path internal/similar's Decisions
+// persist to — namespaced under the same directory internal/store
+// (snapshots) and internal/ledger (sessions) already use.
+func (s *Service) decisionsPath(root, repo string) (string, error) {
+	dir, err := store.RepoDir(root, repo)
+	if err != nil {
+		return "", fmt.Errorf("service: resolving repo directory: %w", err)
+	}
+	return similar.DecisionsPath(dir), nil
+}
+
+func (s *Service) loadDecisions(root, repo string) (*similar.Decisions, error) {
+	path, err := s.decisionsPath(root, repo)
+	if err != nil {
+		return nil, err
+	}
+	d, err := similar.LoadDecisions(path)
+	if err != nil {
+		return nil, fmt.Errorf("service: loading duplicate decisions: %w", err)
+	}
+	return d, nil
+}
+
+// PairWithEntities pairs one similar.Pair with both entities it names —
+// similar.Pair itself only carries EntityIDs (internal/similar has no
+// business knowing about model.Entity display fields), so this is what
+// every caller (render, MCP) actually wants: the score AND enough to show
+// a human which two entities it's about, with no separate lookup.
+type PairWithEntities struct {
+	Pair similar.Pair
+	A, B model.Entity
+}
+
+func resolvePairs(snap *store.Snapshot, pairs []similar.Pair) []PairWithEntities {
+	out := make([]PairWithEntities, 0, len(pairs))
+	for _, p := range pairs {
+		a, aok := snap.Lookup(p.A)
+		b, bok := snap.Lookup(p.B)
+		if !aok || !bok {
+			continue // an entity removed since Find last ran (stale snapshot mid-read) — skip rather than show a blank half-pair
+		}
+		out = append(out, PairWithEntities{Pair: p, A: a, B: b})
+	}
+	return out
+}
+
+// Similar finds every undecided similarity/duplicate candidate involving
+// the entity named name — internal/similar's Function/Method-only V0
+// scope, see its package doc. Returns the matched entity alongside the
+// pairs so a caller can render both without a second lookup.
+func (s *Service) Similar(root, repo, name, fileHint string) ([]PairWithEntities, model.Entity, error) {
+	snap, err := s.open(root, repo)
+	if err != nil {
+		return nil, model.Entity{}, err
+	}
+	match, err := findUnique(snap, name, fileHint)
+	if err != nil {
+		return nil, model.Entity{}, err
+	}
+	all, err := similar.Find(snap, root, 0)
+	if err != nil {
+		return nil, model.Entity{}, fmt.Errorf("service: finding similarity candidates: %w", err)
+	}
+	decisions, err := s.loadDecisions(root, repo)
+	if err != nil {
+		return nil, model.Entity{}, err
+	}
+	undecided := decisions.Filter(all)
+
+	var out []similar.Pair
+	for _, p := range undecided {
+		if p.A == match.ID || p.B == match.ID {
+			out = append(out, p)
+		}
+	}
+	return resolvePairs(snap, out), match, nil
+}
+
+// Duplicates returns every undecided similarity/duplicate pair across the
+// whole repo whose Overall score is >= threshold (threshold<=0 uses
+// similar.DefaultThreshold), sorted by Overall descending.
+func (s *Service) Duplicates(root, repo string, threshold float64) ([]PairWithEntities, error) {
+	if threshold <= 0 {
+		threshold = similar.DefaultThreshold
+	}
+	snap, err := s.open(root, repo)
+	if err != nil {
+		return nil, err
+	}
+	pairs, err := similar.Find(snap, root, threshold)
+	if err != nil {
+		return nil, fmt.Errorf("service: finding duplicate candidates: %w", err)
+	}
+	decisions, err := s.loadDecisions(root, repo)
+	if err != nil {
+		return nil, err
+	}
+	return resolvePairs(snap, decisions.Filter(pairs)), nil
+}
+
+// Decide records a human decision on the pair (nameA, nameB) — persisted
+// so it never resurfaces via Similar/Duplicates again. Both names are
+// resolved the same ambiguity-checked way every other by-name lookup in
+// this file is.
+func (s *Service) Decide(root, repo, nameA, fileHintA, nameB, fileHintB string, decision similar.Decision) error {
+	snap, err := s.open(root, repo)
+	if err != nil {
+		return err
+	}
+	a, err := findUnique(snap, nameA, fileHintA)
+	if err != nil {
+		return err
+	}
+	b, err := findUnique(snap, nameB, fileHintB)
+	if err != nil {
+		return err
+	}
+	decisions, err := s.loadDecisions(root, repo)
+	if err != nil {
+		return err
+	}
+	decisions.Decide(a.ID, b.ID, decision)
+	path, err := s.decisionsPath(root, repo)
+	if err != nil {
+		return err
+	}
+	if err := decisions.Save(path); err != nil {
+		return fmt.Errorf("service: saving duplicate decision: %w", err)
+	}
+	return nil
 }

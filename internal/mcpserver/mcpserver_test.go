@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -200,6 +201,107 @@ func TestMCPServer_Path(t *testing.T) {
 	}
 }
 
+// duplicateFixtureRoot writes a tiny standalone TS fixture with one real
+// near-duplicate pair — internal/similar's own scope (Function/Method
+// entities), separate from fixtureRoot's ts-basic (which has no obvious
+// duplicates), so context_similar/context_duplicates/context_decide have
+// something real to find.
+func duplicateFixtureRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	src := `export function computeTotal(items: number[]): number {
+  let total = 0;
+  let count = 0;
+  for (const item of items) {
+    total += item;
+    count += 1;
+  }
+  return total / count;
+}
+
+export function computeAverage(items: number[]): number {
+  let total = 0;
+  let count = 0;
+  for (const item of items) {
+    total += item;
+    count += 1;
+  }
+  return total / count;
+}
+`
+	if err := os.WriteFile(filepath.Join(root, "a.ts"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func TestMCPServer_Duplicates(t *testing.T) {
+	cs := connect(t)
+	root := duplicateFixtureRoot(t)
+	callTool(t, cs, "context_index", map[string]any{"root": root})
+
+	res := callTool(t, cs, "context_duplicates", map[string]any{"root": root})
+	if res.IsError {
+		t.Fatalf("context_duplicates returned an error: %s", textOf(t, res))
+	}
+	if !strings.Contains(textOf(t, res), "computeTotal") || !strings.Contains(textOf(t, res), "computeAverage") {
+		t.Errorf("expected the known duplicate pair in the output, got: %s", textOf(t, res))
+	}
+}
+
+func TestMCPServer_Similar(t *testing.T) {
+	cs := connect(t)
+	root := duplicateFixtureRoot(t)
+	callTool(t, cs, "context_index", map[string]any{"root": root})
+
+	res := callTool(t, cs, "context_similar", map[string]any{"root": root, "name": "computeTotal"})
+	if res.IsError {
+		t.Fatalf("context_similar returned an error: %s", textOf(t, res))
+	}
+	if !strings.Contains(textOf(t, res), "computeAverage") {
+		t.Errorf("expected computeTotal's known duplicate (computeAverage) in the output, got: %s", textOf(t, res))
+	}
+}
+
+func TestMCPServer_Decide_RemovesPairFromLaterDuplicatesCalls(t *testing.T) {
+	cs := connect(t)
+	root := duplicateFixtureRoot(t)
+	callTool(t, cs, "context_index", map[string]any{"root": root})
+
+	before := callTool(t, cs, "context_duplicates", map[string]any{"root": root})
+	if before.IsError || !strings.Contains(textOf(t, before), "computeTotal") {
+		t.Fatalf("expected the duplicate pair to be found before deciding, got: %s", textOf(t, before))
+	}
+
+	decideRes := callTool(t, cs, "context_decide", map[string]any{
+		"root": root, "name_a": "computeTotal", "name_b": "computeAverage", "decision": "intentional",
+	})
+	if decideRes.IsError {
+		t.Fatalf("context_decide returned an error: %s", textOf(t, decideRes))
+	}
+
+	after := callTool(t, cs, "context_duplicates", map[string]any{"root": root})
+	if after.IsError {
+		t.Fatalf("context_duplicates (after) returned an error: %s", textOf(t, after))
+	}
+	if strings.Contains(textOf(t, after), "computeTotal") {
+		t.Errorf("expected the decided pair to no longer resurface, got: %s", textOf(t, after))
+	}
+}
+
+func TestMCPServer_Decide_InvalidDecision_IsToolError(t *testing.T) {
+	cs := connect(t)
+	root := duplicateFixtureRoot(t)
+	callTool(t, cs, "context_index", map[string]any{"root": root})
+
+	res := callTool(t, cs, "context_decide", map[string]any{
+		"root": root, "name_a": "computeTotal", "name_b": "computeAverage", "decision": "not-a-real-decision",
+	})
+	if !res.IsError {
+		t.Fatal("expected an invalid decision value to be a tool-level error")
+	}
+}
+
 func TestMCPServer_Compile(t *testing.T) {
 	cs := connect(t)
 	root := fixtureRoot(t)
@@ -269,6 +371,9 @@ func TestMCPServer_StructuredContentIsAlwaysAnObject(t *testing.T) {
 		{"context_impact", map[string]any{"root": root, "name": "UserService", "file": "services"}},
 		{"context_path", map[string]any{"root": root, "from": "UserService", "from_file": "services", "to": "UserService", "to_file": "services"}},
 		{"context_stats", map[string]any{"root": root}},
+		{"context_similar", map[string]any{"root": root, "name": "register", "file": "services"}},
+		{"context_duplicates", map[string]any{"root": root}},
+		{"context_decide", map[string]any{"root": root, "name_a": "UserService", "file_a": "services", "name_b": "OrderService", "file_b": "services", "decision": "false-positive"}},
 	}
 	for _, c := range cases {
 		t.Run(c.tool, func(t *testing.T) {

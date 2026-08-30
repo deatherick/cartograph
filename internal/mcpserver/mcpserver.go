@@ -24,12 +24,14 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/deatherick/cartograph/internal/model"
 	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
+	"github.com/deatherick/cartograph/internal/similar"
 )
 
 // New builds an MCP server wrapping svc, with every tool registered.
@@ -95,6 +97,28 @@ func New(svc *service.Service) *mcp.Server {
 		Description: "Shortest path (fewest graph hops) from one named entity to another — how does " +
 			"A reach B, following calls/uses/extends/implements in either direction.",
 	}, pathHandler(svc))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "context_similar",
+		Description: "Undecided similarity/duplicate candidates (Function/Method entities only) " +
+			"involving one named entity — each with a fully decomposed score (exact/structural/" +
+			"behavioral/overall), never one opaque number. Never prescriptive: this is evidence for " +
+			"a human to review, use context_decide to record a disposition so a pair stops resurfacing.",
+	}, similarHandler(svc))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "context_duplicates",
+		Description: "Every undecided similarity/duplicate pair repo-wide (Function/Method entities " +
+			"only) whose overall score clears threshold (default 0.6), sorted highest first. Same " +
+			"scoring and non-prescriptive framing as context_similar.",
+	}, duplicatesHandler(svc))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "context_decide",
+		Description: "Record a human decision on one similarity/duplicate pair (ignore, intentional, " +
+			"same-pattern, should-share-abstraction, false-positive) so it never resurfaces via " +
+			"context_similar/context_duplicates again.",
+	}, decideHandler(svc))
 
 	return server
 }
@@ -295,5 +319,76 @@ func pathHandler(svc *service.Service) mcp.ToolHandlerFor[pathArgs, service.Path
 			return errorResult[service.PathResult](err)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.Path(result)}}}, result, nil
+	}
+}
+
+type similarArgs struct {
+	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Name string `json:"name" jsonschema:"bare name of the entity to find similarity/duplicate candidates for"`
+	File string `json:"file,omitempty" jsonschema:"substring to disambiguate when name matches entities in more than one file"`
+}
+
+// similarResult wraps Match+Pairs — see findResult's doc for why every
+// handler here returns a named struct, never a bare slice.
+type similarResult struct {
+	Match model.Entity               `json:"match"`
+	Pairs []service.PairWithEntities `json:"pairs"`
+}
+
+func similarHandler(svc *service.Service) mcp.ToolHandlerFor[similarArgs, similarResult] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args similarArgs) (*mcp.CallToolResult, similarResult, error) {
+		pairs, match, err := svc.Similar(args.Root, service.RepoName(args.Root), args.Name, args.File)
+		if err != nil {
+			return errorResult[similarResult](err)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.SimilarPairs(match, pairs)}}},
+			similarResult{Match: match, Pairs: pairs}, nil
+	}
+}
+
+type duplicatesArgs struct {
+	Root      string  `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Threshold float64 `json:"threshold,omitempty" jsonschema:"minimum overall score 0..1 a pair must clear (default 0.6)"`
+}
+
+type duplicatesResult struct {
+	Pairs []service.PairWithEntities `json:"pairs"`
+}
+
+func duplicatesHandler(svc *service.Service) mcp.ToolHandlerFor[duplicatesArgs, duplicatesResult] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args duplicatesArgs) (*mcp.CallToolResult, duplicatesResult, error) {
+		pairs, err := svc.Duplicates(args.Root, service.RepoName(args.Root), args.Threshold)
+		if err != nil {
+			return errorResult[duplicatesResult](err)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.DuplicatePairs(pairs)}}},
+			duplicatesResult{Pairs: pairs}, nil
+	}
+}
+
+type decideArgs struct {
+	Root     string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	NameA    string `json:"name_a" jsonschema:"bare name of the first entity in the pair"`
+	FileA    string `json:"file_a,omitempty" jsonschema:"substring to disambiguate name_a"`
+	NameB    string `json:"name_b" jsonschema:"bare name of the second entity in the pair"`
+	FileB    string `json:"file_b,omitempty" jsonschema:"substring to disambiguate name_b"`
+	Decision string `json:"decision" jsonschema:"one of: ignore, intentional, same-pattern, should-share-abstraction, false-positive"`
+}
+
+type decideResult struct {
+	Recorded bool `json:"recorded"`
+}
+
+func decideHandler(svc *service.Service) mcp.ToolHandlerFor[decideArgs, decideResult] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args decideArgs) (*mcp.CallToolResult, decideResult, error) {
+		decision, ok := similar.ParseDecision(args.Decision)
+		if !ok {
+			return errorResult[decideResult](fmt.Errorf("%q is not a valid decision — must be one of: %s", args.Decision, similar.ValidDecisions()))
+		}
+		if err := svc.Decide(args.Root, service.RepoName(args.Root), args.NameA, args.FileA, args.NameB, args.FileB, decision); err != nil {
+			return errorResult[decideResult](err)
+		}
+		text := fmt.Sprintf("recorded: %s <-> %s = %s\n", args.NameA, args.NameB, decision)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, decideResult{Recorded: true}, nil
 	}
 }

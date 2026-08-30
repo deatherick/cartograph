@@ -23,6 +23,7 @@ import (
 	"github.com/deatherick/cartograph/internal/project"
 	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
+	"github.com/deatherick/cartograph/internal/similar"
 )
 
 func main() {
@@ -59,6 +60,12 @@ func main() {
 		err = runPath(svc, os.Args[2:])
 	case "project":
 		err = runProject(os.Args[2:])
+	case "similar":
+		err = runSimilar(svc, os.Args[2:])
+	case "duplicates":
+		err = runDuplicates(svc, os.Args[2:])
+	case "decide":
+		err = runDecide(svc, os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -88,6 +95,10 @@ Usage:
   ctx project add <name> <path>    register <path> under <name>
   ctx project list                 show every registered project
   ctx project remove <name>        unregister <name>
+  ctx similar <path> <name> [--file <substring>]   undecided duplicate/similarity candidates involving one entity
+  ctx duplicates <path> [--threshold N]   every undecided duplicate/similarity pair repo-wide (default threshold 0.6)
+  ctx decide <path> <nameA> <nameB> <decision> [--a-file <sub>] [--b-file <sub>]   record a human decision on one pair
+    decisions: `+similar.ValidDecisions()+`
 
 find/related/stats read the snapshot persisted by the last `+"`ctx index`"+` run — they
 do not re-index. Run `+"`ctx index <path>`"+` first, and again after the source changes.
@@ -428,6 +439,54 @@ func runPath(svc *service.Service, args []string) error {
 		return err
 	}
 	fmt.Print(render.Path(result))
+	return nil
+}
+
+func runSimilar(svc *service.Service, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: ctx similar <path> <name> [--file <substring>]")
+	}
+	root, name := project.Resolve(args[0]), args[1]
+	pairs, match, err := svc.Similar(root, service.RepoName(root), name, flagValue(args, "--file"))
+	if err != nil {
+		return err
+	}
+	fmt.Print(render.SimilarPairs(match, pairs))
+	return nil
+}
+
+func runDuplicates(svc *service.Service, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: ctx duplicates <path> [--threshold N]")
+	}
+	root := project.Resolve(args[0])
+	threshold := 0.0
+	if v := flagValue(args, "--threshold"); v != "" {
+		if f, perr := strconv.ParseFloat(v, 64); perr == nil {
+			threshold = f
+		}
+	}
+	pairs, err := svc.Duplicates(root, service.RepoName(root), threshold)
+	if err != nil {
+		return err
+	}
+	fmt.Print(render.DuplicatePairs(pairs))
+	return nil
+}
+
+func runDecide(svc *service.Service, args []string) error {
+	if len(args) < 4 {
+		return fmt.Errorf("usage: ctx decide <path> <nameA> <nameB> <decision> [--a-file <sub>] [--b-file <sub>]\n  decisions: %s", similar.ValidDecisions())
+	}
+	root, nameA, nameB, decisionStr := project.Resolve(args[0]), args[1], args[2], args[3]
+	decision, ok := similar.ParseDecision(decisionStr)
+	if !ok {
+		return fmt.Errorf("ctx decide: %q is not a valid decision — must be one of: %s", decisionStr, similar.ValidDecisions())
+	}
+	if err := svc.Decide(root, service.RepoName(root), nameA, flagValue(args, "--a-file"), nameB, flagValue(args, "--b-file"), decision); err != nil {
+		return err
+	}
+	fmt.Printf("recorded: %s <-> %s = %s\n", nameA, nameB, decision)
 	return nil
 }
 

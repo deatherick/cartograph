@@ -234,10 +234,18 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
   original exit criterion — across 20 real historical commits, the proposed test set actually
   contains the tests that commit touched, ≥80% of the time — was not run; needs a real repo with
   meaningful history/coverage to validate against).
-- **Duplicate/Similarity Engine** (Phase 5) — the LSH funnel, the duplicate-decision UI concept.
+- ~~Duplicate/Similarity Engine~~ (Phase 5) — **V0 done**, ADR-0021: `internal/similar`'s real
+  funnel (exact fingerprint -> MinHash+LSH candidate generation -> structural+behavioral scoring),
+  `ctx similar/duplicates/decide` (CLI), `context_similar/duplicates/decide` (MCP), decision
+  persistence. Honestly narrower than the full ask: no L2 bounded AST tree-edit distance (token-
+  shingle Jaccard stands in), no renamed-identifier normalization, and the labeled eval set is 24
+  pairs, not the master plan's ≥120 — measured precision 1.00 / recall 0.50 on that smaller set,
+  reported plainly, not rounded up. The duplicate-decision UI concept (a Web UI panel) remains
+  not built — see the Web UI item below.
 - **Web UI beyond ADR-0013/0015/0019's scope** — entity classification/tagging, pattern
   identification as a first-class surface, filtering as a cross-cutting primitive, a Duplicates
-  view (blocked on Phase 5), and a Projects/Settings management page (add/remove a project from the
+  view (its data now exists, ADR-0021, but no UI panel reads it yet), and a Projects/Settings
+  management page (add/remove a project from the
   UI itself — today only the switcher exists; adding one still means `ctx project add` + restarting
   `ctxd`). Multi-project watching and live updates on reindex are now done (ADR-0019, polling-based,
   not push-based). Full remaining ask in `docs/requirements/phase6-web-ui.md`.
@@ -349,7 +357,17 @@ This closes every item in the weighted "easy win" batch (Paths, Quality, Operati
     ADR-0020). Verified live against this project's own real, self-hosted, running `ctxd`: a
     cross-file rename correctly propagated to the importing file (resolved -> bug-resolver and
     back) in ~4ms, against ~960ms for a full reindex of the same 105-file repo.
-17. Next after that, per the deferred list above: C#/Python extractors (Phase 3b/3c), the
-    similarity/duplicate engine (Phase 5), or the global-install/system-service work (Phase 9) —
-    prioritized by real usage feedback, not by continuing to iterate against one synthetic
-    fixture.
+17. ~~Similarity/Duplicate Engine (Phase 5) — V0~~ — done, ADR-0021, picked by the user after a
+    weighted review of the remaining large backlog items: `internal/similar`'s real funnel (exact
+    fingerprint -> MinHash+LSH candidate generation -> structural+behavioral scoring, never one
+    opaque number), `ctx similar/duplicates/decide` (CLI), `context_similar/duplicates/decide`
+    (MCP), per-repo decision persistence. A real bug was found and fixed via the eval fixture
+    itself (behavioral score wrongly penalized entities with zero resolved calls) — see the ADR.
+    Honestly narrower than the full ask (no AST tree-edit distance, no renamed-identifier
+    normalization, a 24-pair eval vs. the master plan's ≥120): measured precision 1.00 / recall
+    0.50 on that smaller set, reported as measured.
+18. Next after that, per the deferred list above: C#/Python extractors (Phase 3b/3c), the
+    global-install/system-service work (Phase 9), or deepening the Similarity Engine (AST tree-edit
+    distance, identifier normalization, a larger labeled eval set, Web UI/Context Compiler
+    integration) — prioritized by real usage feedback, not by continuing to iterate against one
+    synthetic fixture.

@@ -214,3 +214,46 @@ func GitDiffImpact(r service.GitDiffImpact) string {
 	}
 	return b.String()
 }
+
+// pairLine renders one similarity/duplicate pair's score, always fully
+// decomposed (Exact/Structural/Behavioral/Overall) — never a single
+// opaque number, matching internal/similar's own package-level rule.
+func pairLine(b *strings.Builder, p service.PairWithEntities) {
+	tag := "similar"
+	if p.Pair.Exact {
+		tag = "EXACT"
+	}
+	fmt.Fprintf(b, "  [%s] overall=%.2f (structural=%.2f behavioral=%.2f)\n", tag, p.Pair.Overall, p.Pair.Structural, p.Pair.Behavioral)
+	fmt.Fprintf(b, "    %s %s (%s:%d-%d)\n", p.A.Kind, p.A.Qualified, p.A.Anchor.File, p.A.Anchor.StartLine, p.A.Anchor.EndLine)
+	fmt.Fprintf(b, "    %s %s (%s:%d-%d)\n", p.B.Kind, p.B.Qualified, p.B.Anchor.File, p.B.Anchor.StartLine, p.B.Anchor.EndLine)
+}
+
+// SimilarPairs renders every undecided similarity/duplicate candidate
+// involving one entity (`ctx similar`/context_similar).
+func SimilarPairs(match model.Entity, pairs []service.PairWithEntities) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s — %d undecided similarity candidate(s):\n", match.Kind, match.Qualified, len(pairs))
+	if len(pairs) == 0 {
+		b.WriteString("  (none)\n")
+		return b.String()
+	}
+	for _, p := range pairs {
+		pairLine(&b, p)
+	}
+	return b.String()
+}
+
+// DuplicatePairs renders every undecided duplicate/similarity pair
+// repo-wide (`ctx duplicates`/context_duplicates) — never prescriptive
+// ("must merge"): evidence only, a human decides (`ctx decide`).
+func DuplicatePairs(pairs []service.PairWithEntities) string {
+	if len(pairs) == 0 {
+		return "no undecided duplicate/similarity pairs found\n"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d undecided duplicate/similarity pair(s):\n", len(pairs))
+	for _, p := range pairs {
+		pairLine(&b, p)
+	}
+	return b.String()
+}
