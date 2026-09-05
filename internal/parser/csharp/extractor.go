@@ -213,6 +213,20 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 		}
 	}
 
+	// Exposed for the resolver's cross-file receiver-type fallback
+	// (internal/resolve's fieldTypesByOwner/lookupFieldTypeCrossFile doc)
+	// — a partial class can legitimately declare a field in one file and
+	// use it (through `this._field.Method()`) in another, which THIS
+	// file's own fieldTypesByOwner (used above, same-file only) cannot
+	// see. Closes the "fieldTypesByOwner only sees whichever file's own
+	// declarations it was built from" half of the documented "No
+	// partial-class support" gap.
+	for owner, fields := range fieldTypesByOwner {
+		for field, ftype := range fields {
+			facts.FieldTypes = append(facts.FieldTypes, model.TypedField{Owner: owner, Field: field, Type: ftype})
+		}
+	}
+
 	return facts, nil
 }
 

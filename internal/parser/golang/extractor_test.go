@@ -250,3 +250,35 @@ func TestExtract_NonTestFileTestPrefixedFuncStaysFunction(t *testing.T) {
 		t.Errorf("got %+v, want a single KindFunction entity", facts.Entities)
 	}
 }
+
+// TestExtract_FieldTypes_ExposedForCrossFileResolution closes the
+// "fieldTypesByOwner only sees whichever file's own declarations they
+// were built from" half of the documented "No partial-class support"
+// gap (shared with C#): a struct's own field types must be exposed on
+// FileFacts.FieldTypes so the resolver can merge them across every file
+// in the same package directory, not just this one.
+func TestExtract_FieldTypes_ExposedForCrossFileResolution(t *testing.T) {
+	src := `package svc
+
+type Service struct {
+	repo *UserRepository
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "test-repo", "internal/svc/service.go", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var found bool
+	for _, tf := range facts.FieldTypes {
+		if tf.Owner == "Service" && tf.Field == "repo" {
+			found = true
+			if tf.Type != "UserRepository" {
+				t.Errorf("got Type %q, want %q", tf.Type, "UserRepository")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a FieldTypes entry for Service.repo, got: %+v", facts.FieldTypes)
+	}
+}

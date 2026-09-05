@@ -309,6 +309,24 @@ type ExtensionMethod struct {
 	ExtendedType string
 }
 
+// TypedField pairs a class/struct/interface's OWN name with one field's
+// name and declared type — exposed so the RESOLVER can merge field-type
+// data across every file in scope, not just the one file an extractor
+// happened to see it in. Needed only for directory/namespace-scoped
+// languages where a type's members can legitimately span multiple files
+// (a Go package, a C# partial class) — TypeScript/Python's own
+// one-class-one-file model has no such gap, so neither extractor
+// populates this; every language's own per-file field-type lookup
+// (built the same way it always has been, e.g. Go's structFieldTypes,
+// C#'s fieldTypesByOwner) is UNCHANGED and still tried first — this is
+// only a fallback for when that same-file lookup finds nothing (see
+// internal/resolve's resolveQualified doc for how the two combine).
+type TypedField struct {
+	Owner string
+	Field string
+	Type  string
+}
+
 // FileFacts is everything an extractor produces for one file: entities plus
 // unresolved refs and the import table, before any cross-file resolution
 // has happened.
@@ -320,6 +338,7 @@ type FileFacts struct {
 	Imports          []ImportBinding
 	ReExports        []ReExport
 	ExtensionMethods []ExtensionMethod
+	FieldTypes       []TypedField
 	ErrorRatio       float64 // from the parser's syntax-error gate
 }
 

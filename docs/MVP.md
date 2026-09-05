@@ -184,6 +184,11 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
 - Dot imports (`. "pkg"`) are not resolved — a rare, discouraged Go idiom. Left as a **permanent**
   gap: `go vet`/linting conventions actively discourage this form in real code, so the ROI of
   supporting it is low relative to the resolver-pipeline surface it would touch.
+- A struct's field type declared in a DIFFERENT file of the same package directory than a call
+  site using it (rarer than C#'s partial classes, but the same underlying gap — see that
+  language's "No partial-class support" entry below) is now resolved cross-file too, via the same
+  shared `FileFacts.FieldTypes`/`lookupFieldTypeCrossFile` mechanism — not something Go-specific,
+  built once and shared.
 
 ### Extraction and resolution (`internal/parser/csharp`) — ADR-0023
 Measured at 0.0% bug_rate on a real repo (eShopOnWeb, 254 files, 777 entities, 337 resolved
@@ -210,9 +215,20 @@ edges) — these are the documented gaps behind that number, not blockers:
   measurably exercised by eShopOnWeb (every extension method there targets an external framework
   type — `IServiceCollection`, `IUrlHelper`, `string`, ...), but unit- and resolver-tested against
   a synthetic same-repo case.
-- No partial-class support — a class split across multiple files (rare, but real) has its
-  fields/methods indexed per-file, not merged; `fieldTypesByOwner`/`methodsByOwner` only see
-  whichever file's own declarations they were built from.
+- ~~No partial-class support~~ **closed**: `methodsByOwner`'s cross-file lookup (via
+  `SameScopeFiles`) already merged correctly across a partial class's files — the actual
+  remaining gap was `fieldTypesByOwner` (a partial class's field declared in one file, used
+  through `this._field.Method()` in another, never saw that field's type). Closed with a small,
+  additive architecture change shared with Go's analogous gap (a struct's field type declared in
+  one file of a package, used in another): every language's own same-file field-type lookup is
+  UNCHANGED (tried first, as before), but each field type is now also exposed on a new
+  `FileFacts.FieldTypes` (`internal/model`), merged by the resolver into a per-owner map spanning
+  every file in scope (`fileEntry.fieldTypesByOwner`, `Index.entityOwner` mapping a calling
+  method's own `Ref.Src` back to its owning class/struct, `lookupFieldTypeCrossFile` in
+  `internal/resolve/resolve.go` — a generic, language-agnostic fallback tier, a no-op for
+  TypeScript/Python, which never populate it since their one-class-one-file model has no such
+  gap). Verified live: eShopOnWeb's own resolved-edge count moved 337 -> 341 with bug_rate still
+  0.0%, and a dedicated resolver test confirms the partial-class shape directly.
 - Qualified names are DIRECTORY-scoped, never derived from a file's own `namespace`/file-scoped
   namespace declaration — same approximation Go's extractor already documents (ADR-0010); a
   namespace that diverges from its folder is a known gap, not a new risk.

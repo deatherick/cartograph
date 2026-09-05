@@ -187,6 +187,18 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 		}
 	}
 
+	// Exposed for the resolver's cross-file receiver-type fallback
+	// (internal/resolve's fieldTypesByOwner/lookupFieldTypeCrossFile doc)
+	// — a Go package's struct can legitimately have its type declared in
+	// one file and be used through a field in another (same directory),
+	// which THIS file's own structFieldTypes (used above, same-file only)
+	// cannot see.
+	for owner, fields := range structFieldTypes {
+		for field, ftype := range fields {
+			facts.FieldTypes = append(facts.FieldTypes, model.TypedField{Owner: owner, Field: field, Type: ftype})
+		}
+	}
+
 	return facts, nil
 }
 

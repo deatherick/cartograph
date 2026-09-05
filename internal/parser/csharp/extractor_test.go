@@ -340,3 +340,35 @@ func TestExtract_ExtensionMethod_ProducesExtensionMethodFact(t *testing.T) {
 		t.Errorf("expected a KindMethod entity matching the extension method's own ID, got: %+v", facts.Entities)
 	}
 }
+
+// TestExtract_FieldTypes_ExposedForCrossFileResolution closes the
+// "fieldTypesByOwner only sees whichever file's own declarations they
+// were built from" half of the documented "No partial-class support"
+// gap: a class's own field types must be exposed on
+// FileFacts.FieldTypes so the resolver can merge them across every file
+// declaring the SAME partial class, not just this one.
+func TestExtract_FieldTypes_ExposedForCrossFileResolution(t *testing.T) {
+	const src = `namespace X {
+  public partial class OrderService {
+    private readonly IOrderRepository _repository;
+  }
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "test-repo", "src/X/OrderService.cs", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var found bool
+	for _, tf := range facts.FieldTypes {
+		if tf.Owner == "OrderService" && tf.Field == "_repository" {
+			found = true
+			if tf.Type != "IOrderRepository" {
+				t.Errorf("got Type %q, want %q", tf.Type, "IOrderRepository")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a FieldTypes entry for OrderService._repository, got: %+v", facts.FieldTypes)
+	}
+}
