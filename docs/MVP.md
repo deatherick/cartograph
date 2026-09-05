@@ -250,10 +250,31 @@ edges) — these are the documented gaps behind that number, not blockers:
   all (verified by a dedicated test). A file this index cannot attribute to any known project
   (an edge case) falls back to the old permissive behavior rather than risk denying a legitimate
   same-project resolution it simply couldn't verify.
-- Real-repo Context Compiler recall (0.65 vs 0.85 target, `fixtures/tasks/eshoponweb.json`)
-  remains open — a seeding/ranking limitation (spot-checked: both gold entities of one
-  zero-recall task are correctly extracted and findable), the same category ADR-0022 already
-  documented and left open for TypeScript, not chased again here.
+- **Real-repo Context Compiler recall (`fixtures/tasks/eshoponweb.json`) is 0.40, not the 0.65 vs
+  0.85 target ADR-0023 originally reported** — corrected after investigating a discrepancy the
+  known-issues sweep surfaced. Root-caused via a `git worktree` bisect across every commit between
+  ADR-0023's original measurement and today, holding the eShopOnWeb clone fixed: the number moved
+  from 0.65 to 0.40 at the exact commit that added xUnit/NUnit/MSTest attribute-based test
+  detection (closing a DIFFERENT, real gap — see this section's own entry above). Before that fix,
+  a `[Fact]`-attributed test method was an ordinary `KindMethod` entity, eligible to SEED a
+  capsule like any other method — and a test method's own name (`BasketAddItem.
+  IncrementsQuantityOfItemIfPresent`) frequently restates a task's own vocabulary almost verbatim,
+  making it a spuriously strong term-overlap match. Once seeded, that test method's own body
+  (typically constructing the exact domain objects it tests, e.g. `new Basket()`/`new
+  BasketItem()`) gave graph expansion an accidental "bridge" into the real gold classes — a path
+  that has nothing to do with genuinely understanding the production task, just an artifact of
+  test code incidentally referencing the same types. Reclassifying test methods to `KindTest`
+  (correctly excluded from seeding — the same "test labels are not useful seeds for a code task"
+  rule Go's own extractor already documents) removed that accidental bridge, and the TRUE
+  underlying recall — reachability from production-code seeds alone — turns out to be
+  considerably worse than the number this project had been reporting. This is not a new
+  regression to fix; it is the same seeding/ranking limitation ADR-0022 already documented and
+  left open for TypeScript (a real ranking function is needed, not another patch — two prior
+  attempts were built, measured, and explicitly REJECTED for regressing the synthetic fixture),
+  now measured honestly rather than inflated by a since-fixed extraction gap. Confirmed
+  unaffected by every other commit in between (Go/C# extension methods, `.csproj`
+  `ProjectReference` gating, Python re-exports, cross-file field types): the number was
+  IDENTICAL (0.40) at every commit from the test-detection fix onward.
 
 ### Extraction and resolution (`internal/parser/python`) — ADR-0024
 Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files, 112 entities,
