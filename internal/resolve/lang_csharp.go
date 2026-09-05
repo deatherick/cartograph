@@ -16,6 +16,14 @@ import (
 type CSharpProject struct {
 	Dir           string
 	RootNamespace string
+	// ProjectReferences is every OTHER project this one references (via
+	// a real `<ProjectReference>`, internal/index/csproj.go), as
+	// repo-relative directories — what gates cross-project namespace
+	// resolution (resolveImportPath's doc): a project's own directory is
+	// always in scope for itself, but crossing into another project's
+	// directory requires a real reference, never just a matching
+	// namespace prefix.
+	ProjectReferences []string
 }
 
 // csPolicy is C#'s LanguagePolicy: one file, self contained, touching
@@ -71,7 +79,7 @@ func (p *csPolicy) SameScopeFiles(idx *Index, file string) []string {
 		if !im.IsNamespace || im.LocalName != "" {
 			continue // LocalName != "" is an alias directive, handled by ResolveQualifiedImport instead
 		}
-		dir, _, found := p.resolveImportPath(idx, im.Source)
+		dir, _, found := p.resolveImportPath(idx, file, im.Source)
 		if !found {
 			continue
 		}
@@ -90,7 +98,7 @@ func (p *csPolicy) SameScopeFiles(idx *Index, file string) []string {
 // LocalName), handled entirely by SameScopeFiles instead — see that
 // method's doc.
 func (p *csPolicy) ResolveQualifiedImport(idx *Index, file string, im model.ImportBinding, ref model.Ref, kind model.EdgeKind) model.ResolvedRef {
-	dir, internal, found := p.resolveImportPath(idx, im.Source)
+	dir, internal, found := p.resolveImportPath(idx, file, im.Source)
 	if !internal {
 		return p.externalDisposition(im.Source)
 	}
@@ -151,7 +159,7 @@ func (p *csPolicy) FollowImportToMethods(idx *Index, file string, fe *fileEntry,
 // directory, so every file in it is returned (a copy, since
 // idx.filesByDir[dir] is a live slice callers must not mutate).
 func (p *csPolicy) ResolveImportTarget(idx *Index, file, source string) ([]string, bool) {
-	dir, internal, found := p.resolveImportPath(idx, source)
+	dir, internal, found := p.resolveImportPath(idx, file, source)
 	if !internal || !found {
 		return nil, false
 	}
@@ -185,11 +193,16 @@ func (p *csPolicy) FinalDisposition(idx *Index, ref model.Ref, kind model.EdgeKi
 // resolveImportPath maps a C# namespace string to a repo-relative
 // directory using p.projects (from every .csproj this run found).
 // internal reports whether namespace is an EXACT prefix match of some
-// known project's root namespace (false routes the caller to
-// externalDisposition instead of guessing); found reports whether that
-// directory actually has any indexed file. Deliberately exact-only — no
-// partial/suffix matching — per this ADR's explicit design guard.
-func (p *csPolicy) resolveImportPath(idx *Index, namespace string) (dir string, internal bool, found bool) {
+// known project's root namespace, AND (when file's own project is
+// identifiable) that project is either the SAME project or one it has a
+// real `<ProjectReference>` to — false routes the caller to
+// externalDisposition instead of guessing either way; found reports
+// whether that directory actually has any indexed file. Deliberately
+// exact-only at both levels — no partial/suffix namespace matching (this
+// ADR's original design guard), and no cross-project resolution without
+// a real project reference (extended here the same way).
+func (p *csPolicy) resolveImportPath(idx *Index, file, namespace string) (dir string, internal bool, found bool) {
+	callerProj, hasCallerProj := p.findProjectForFile(file)
 	for _, proj := range p.projects {
 		var candidate string
 		switch {
@@ -201,10 +214,90 @@ func (p *csPolicy) resolveImportPath(idx *Index, namespace string) (dir string, 
 		default:
 			continue
 		}
+		if hasCallerProj && proj.Dir != callerProj.Dir && !p.transitivelyReferences(callerProj.Dir, proj.Dir) {
+			// A real namespace match, but crossing into ANOTHER
+			// project's directory with no (possibly transitive)
+			// `<ProjectReference>` path — real C# code in callerProj
+			// could not actually compile against this namespace, so it
+			// is not treated as resolvable here either (never a guess
+			// that happens to "look right"). Transitive, not direct-only:
+			// MSBuild project references genuinely flow transitively for
+			// compilation (A -> B -> C means A can use C's public types
+			// too) — verified against eShopOnWeb's own real structure,
+			// where IntegrationTests reaches ApplicationCore/Web only
+			// via UnitTests, not a direct reference of its own; a
+			// direct-only check regressed 8 real edges from Resolved to
+			// Ambiguous/ExternalUnknown before this was caught.
+			// hasCallerProj is deliberately required for this gate: a
+			// file this index could not attribute to any known project
+			// (an edge case — e.g. a stray .cs file outside every
+			// discovered .csproj) falls back to the OLD permissive
+			// behavior rather than risk denying a legitimate same-project
+			// resolution this project simply couldn't verify.
+			continue
+		}
 		_, found = idx.filesByDir[candidate]
 		return candidate, true, found
 	}
 	return "", false, false
+}
+
+// findProjectForFile returns the project that OWNS file — the one whose
+// Dir is a prefix of file's own directory, preferring the LONGEST such
+// Dir (most specific) in case of a nested multi-project layout. ok=false
+// when file's directory falls under no known project at all.
+func (p *csPolicy) findProjectForFile(file string) (proj CSharpProject, ok bool) {
+	fileDir := path.Dir(file)
+	bestLen := -1
+	for _, candidate := range p.projects {
+		matches := candidate.Dir == fileDir || candidate.Dir == "" || strings.HasPrefix(fileDir, candidate.Dir+"/")
+		if matches && len(candidate.Dir) > bestLen {
+			proj, ok, bestLen = candidate, true, len(candidate.Dir)
+		}
+	}
+	return proj, ok
+}
+
+// transitivelyReferences reports whether fromDir's project can reach
+// targetDir's project by following ProjectReference edges, directly or
+// transitively — a real MSBuild property (A referencing B referencing C
+// means A can use C's public types too, not just B's own; verified
+// against eShopOnWeb's real structure, where IntegrationTests reaches
+// ApplicationCore only via UnitTests, no direct reference of its own).
+// A plain BFS: project counts in a real solution are small (single
+// digits to low tens), so this is not worth precomputing/caching. The
+// visited set also defensively guards against a reference cycle, which
+// real MSBuild forbids but this project never assumes without checking.
+func (p *csPolicy) transitivelyReferences(fromDir, targetDir string) bool {
+	visited := map[string]bool{fromDir: true}
+	queue := []string{fromDir}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		proj, ok := p.projectByDir(cur)
+		if !ok {
+			continue
+		}
+		for _, ref := range proj.ProjectReferences {
+			if ref == targetDir {
+				return true
+			}
+			if !visited[ref] {
+				visited[ref] = true
+				queue = append(queue, ref)
+			}
+		}
+	}
+	return false
+}
+
+func (p *csPolicy) projectByDir(dir string) (CSharpProject, bool) {
+	for _, proj := range p.projects {
+		if proj.Dir == dir {
+			return proj, true
+		}
+	}
+	return CSharpProject{}, false
 }
 
 // findExportedEntity looks up name across every file in a namespace

@@ -50,7 +50,7 @@ func registry(root string) []Language {
 	csProjects := loadCSharpProjects(root)
 	resolveProjects := make([]resolve.CSharpProject, len(csProjects))
 	for i, p := range csProjects {
-		resolveProjects[i] = resolve.CSharpProject{Dir: p.Dir, RootNamespace: p.RootNamespace}
+		resolveProjects[i] = resolve.CSharpProject{Dir: p.Dir, RootNamespace: p.RootNamespace, ProjectReferences: p.ProjectReferences}
 	}
 	return []Language{
 		{
