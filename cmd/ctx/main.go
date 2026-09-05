@@ -87,7 +87,7 @@ Usage:
   ctx init <path> [--yes] [--languages a,b]   wizard: detect languages, write .cartograph.json
   ctx languages <path>           show which languages are detected/enabled for this repo
   ctx index <path>              index a repo, persist a snapshot, print run stats
-  ctx context <path> "<task>" --budget N [--session ID]   compile a token-budgeted capsule
+  ctx context <path> "<task>" --budget N [--session ID] [--file <substring>]   compile a token-budgeted capsule
   ctx find <path> <name>        find every entity with this bare name (reads snapshot)
   ctx inspect <path> <name>     full detail on one entity: signature, fan-in, fan-out
   ctx related <path> <name> [--depth N]   entities within N hops (reads snapshot)
@@ -309,7 +309,7 @@ func runIndex(svc *service.Service, args []string) error {
 
 func runContext(svc *service.Service, args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf(`usage: ctx context <path> "<task>" [--budget N] [--session ID]`)
+		return fmt.Errorf(`usage: ctx context <path> "<task>" [--budget N] [--session ID] [--file <substring>]`)
 	}
 	root, task := project.Resolve(args[0]), args[1]
 	budget := 2500
@@ -319,8 +319,9 @@ func runContext(svc *service.Service, args []string) error {
 		}
 	}
 	session := flagValue(args, "--session")
+	fileFilter := flagValue(args, "--file")
 
-	capsule, err := svc.Context(root, service.RepoName(root), task, budget, session)
+	capsule, err := svc.ContextScoped(root, service.RepoName(root), task, budget, session, fileFilter)
 	if err != nil {
 		return err
 	}

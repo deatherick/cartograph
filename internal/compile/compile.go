@@ -92,14 +92,14 @@ func fromLedgerLevel(l ledger.Level) Level {
 
 // Item is one entry of a compiled Capsule.
 type Item struct {
-	Handle       string
-	Entity       model.Entity
-	Category     string // "primary" | "related"
-	Level        Level
-	Text         string
-	Tokens       int
-	Score        float64
-	AlreadySent  bool // true when the ledger already had this at >= Level
+	Handle      string
+	Entity      model.Entity
+	Category    string // "primary" | "related"
+	Level       Level
+	Text        string
+	Tokens      int
+	Score       float64
+	AlreadySent bool // true when the ledger already had this at >= Level
 }
 
 // Capsule is the Context Compiler's output.
@@ -121,6 +121,18 @@ type Options struct {
 	SessionID string // "" disables the ledger — every call is stateless
 	MaxSeeds  int    // top-N seed matches to expand from; 0 uses a sane default
 	MaxDepth  int    // graph expansion depth from each seed; 0 uses a sane default
+	// FileFilter scopes SEEDING to entities whose Anchor.File contains
+	// this substring — the same convention every other `--file`
+	// disambiguation already uses (internal/service.findUnique). Closes
+	// docs/MVP.md's own "a task capsule can't currently be scoped to
+	// 'only consider files matching X'" gap. Deliberately narrows only
+	// the SEED pool (what can become a primary match), not graph
+	// expansion from an accepted seed — a seed's real dependencies
+	// legitimately live in other files, and excluding them would produce
+	// an incomplete, disconnected capsule instead of a scoped one. "" (the
+	// default) disables filtering entirely, unchanged from before this
+	// field existed.
+	FileFilter string
 }
 
 const (
@@ -156,7 +168,7 @@ func Compile(root, repo, task string, opts Options) (*Capsule, error) {
 		return nil, fmt.Errorf("no index found for %s — run `ctx index %s` first (%w)", root, root, err)
 	}
 
-	candidates := rank(snap, task, opts.MaxSeeds, opts.MaxDepth)
+	candidates := rank(snap, task, opts.MaxSeeds, opts.MaxDepth, opts.FileFilter)
 
 	var led *ledger.State
 	var ledgerPath string
@@ -332,7 +344,7 @@ func matchScore(e model.Entity, terms []string, idf map[string]float64) float64 
 // rank produces every candidate entity for task: seed matches (top
 // maxSeeds by score) plus their graph neighborhood out to maxDepth,
 // scored by seed score decayed per hop.
-func rank(snap *store.Snapshot, task string, maxSeeds, maxDepth int) []candidate {
+func rank(snap *store.Snapshot, task string, maxSeeds, maxDepth int, fileFilter string) []candidate {
 	terms := tokenizeTask(task)
 	all := snap.All()
 	idf := termWeights(all, terms)
@@ -341,6 +353,9 @@ func rank(snap *store.Snapshot, task string, maxSeeds, maxDepth int) []candidate
 	for _, e := range all {
 		if e.Kind == model.KindTest {
 			continue // test labels are not useful seeds for a code task
+		}
+		if fileFilter != "" && !strings.Contains(e.Anchor.File, fileFilter) {
+			continue // FileFilter scopes seeding only — see Options.FileFilter's doc
 		}
 		if s := matchScore(e, terms, idf); s > 0 {
 			seeds = append(seeds, candidate{e, "primary", s})

@@ -242,7 +242,17 @@ func (s *Service) Source(root, repo, name, fileHint string) (string, model.Entit
 // already exist (same "run ctx index first" contract as every other read
 // path).
 func (s *Service) Context(root, repo, task string, budget int, sessionID string) (*compile.Capsule, error) {
-	return compile.Compile(root, repo, task, compile.Options{Budget: budget, SessionID: sessionID})
+	return s.ContextScoped(root, repo, task, budget, sessionID, "")
+}
+
+// ContextScoped is Context plus fileFilter — scopes seeding to entities
+// whose file contains fileFilter (the same `--file` disambiguation
+// convention every other lookup already uses, findUnique above), closing
+// docs/MVP.md's own "a task capsule can't currently be scoped to 'only
+// consider files matching X'" gap. fileFilter="" behaves exactly like
+// Context (unchanged).
+func (s *Service) ContextScoped(root, repo, task string, budget int, sessionID, fileFilter string) (*compile.Capsule, error) {
+	return compile.Compile(root, repo, task, compile.Options{Budget: budget, SessionID: sessionID, FileFilter: fileFilter})
 }
 
 // Stats loads the persisted snapshot and returns summary counts, including

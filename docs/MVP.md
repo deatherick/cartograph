@@ -108,20 +108,31 @@ rediscover this later" list.
 - `Entity.Signature` and `Entity.DocSummary` are never populated — the source ladder's
   signature/skeleton rungs read the first source line as a stand-in (`internal/compile`'s
   package doc). A real reconstructed signature string is better long-term.
-- Destructured CJS require with renaming (`const { a: renamed } = require(...)`) — only the
-  shorthand form is handled (`internal/parser/ts/extractor.go`).
-- tsconfig `extends` (config inheritance) and JSONC (comments/trailing commas) are not handled —
-  a malformed/unsupported tsconfig is skipped, not guessed at (`internal/index/tsconfig.go`).
-- Nested calls inside a test callback (`it('...', () => { ... })`) are not attributed to the test
-  entity as `Src` — would need arrow-function callbacks registered as scopes, matching
-  `methodassign`'s existing pattern (`internal/parser/ts/extractor.go`).
+- ~~Destructured CJS require with renaming (`const { a: renamed } = require(...)`) — only the
+  shorthand form is handled~~ **closed**: the renaming form (`pair_pattern`) is now a dedicated
+  query pattern (`internal/parser/ts/queries/entities.scm`'s `import.cjs.stmt3`).
+- ~~tsconfig `extends` (config inheritance) ... not handled~~ **closed**: `loadTSConfig` now
+  follows a relative-path `extends` chain (cycle-guarded), merging per tsconfig's own
+  compilerOptions-level override semantics — a child's own `baseUrl`/`paths` replace the parent's
+  wholesale when present, otherwise the parent's are inherited (`internal/index/tsconfig.go`).
+  JSONC (comments/trailing commas) and a package-specifier `extends` target (needing
+  node_modules resolution) remain unsupported — a malformed/unsupported tsconfig is skipped, not
+  guessed at.
+- ~~Nested calls inside a test callback ... are not attributed to the test entity as `Src`~~
+  **closed**: the test query now captures the trailing callback (`test.callback`), registered in
+  `scopeByStartByte` the same way `methodassign`'s does; `enclosingScope` now also walks through
+  `arrow_function` (`internal/parser/ts/extractor.go`).
 - No export-awareness — every top-level entity is treated as visible/exported; a private helper
   with the same name as a real export in the same file is a false-resolve risk
-  (`internal/resolve/resolve.go`).
+  (`internal/resolve/resolve.go`). Deliberately deferred: closing it properly across all four
+  languages (Go's own exported-vs-unexported casing aside) is a bigger, riskier change than fits
+  this pass — flagged here rather than attempted piecemeal.
 
 ### Resolution (`internal/resolve`)
-- tsconfig path aliases only support single-wildcard patterns (`"@/*": ["src/*"]`) — multi-segment
-  or regex-like patterns are unsupported.
+- tsconfig path aliases only support single-wildcard patterns (`"@/*": ["src/*"]`) — this matches
+  tsconfig's own specification (at most one `*` per pattern is valid there too), so this is not
+  actually a gap relative to real-world tsconfig files, just a note that a malformed
+  multi-wildcard/regex-like pattern in `paths` is ignored rather than guessed at.
 
 ### Language plugin architecture (`internal/resolve`, `internal/index`) — ADR-0011
 - "Plug and play" means architecturally decoupled and independently addable at the source level
@@ -142,25 +153,49 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
 - A local variable's function type inferred from a multi-return call's second value (`ctx, cancel
   := context.WithTimeout(...)`) is not detected — only a syntactic func literal or a func-typed
   annotation is. The one remaining bug-extractor case in the self-hosting measurement.
-- Struct fields typed from another package via `pkg.Type` (`repo *pkg.UserRepo`) produce no
-  receiver-type signal — only bare `type_identifier` fields do. A call through such a field
-  resolves to `DispositionUnimplemented`, not a wrong answer.
+  **Deliberately left open**: closing it correctly needs the REAL declared return type of
+  whatever function is being called; for a std-lib/external call (like `context.WithTimeout`)
+  that means either full type-checking (out of scope for a tree-sitter-query extractor) or a
+  hand-maintained table of known external functions' return types — the latter is itself a form
+  of the guessing this project's own anti-inference discipline rejects (a hardcoded fact about
+  ONE external function, not a general rule), so it's left as a documented gap rather than
+  patched with a special case.
+- ~~Struct fields typed from another package via `pkg.Type` ... produce no receiver-type
+  signal~~ **closed**: a named field's qualified type (`repo *pkg.UserRepo`) is now captured
+  (`field.decl.qualified`/`field.decl.qualified.ptr`) and stored as the compound string
+  `"pkgAlias.TypeName"`; the resolver's `FollowImportToMethods` (`internal/resolve/lang_go.go`)
+  splits it, resolves the alias through the file's own import table to a directory, and looks the
+  method up there — exact matches only, same discipline as every other tier. An anonymous
+  (embedded) field of a qualified type is deliberately NOT matched by the same query (kept
+  `field.name` required, not optional) — that shape stays an unhandled gap rather than risk a
+  wrongly-scoped `RefExtends` target.
 - No export-awareness — same gap as TypeScript's resolver, not fixed twice.
 - Go's implicit interface satisfaction (no `implements` keyword) is a **permanent** gap: this
   extractor never emits `RefImplements` for Go — detecting it needs real type-checking, not
   tree-sitter queries.
 - An import's local identifier, when no alias is written, is approximated as the import path's
   last path segment — wrong only for the rare package whose declared name differs from its
-  directory name.
-- Dot imports (`. "pkg"`) are not resolved — a rare, discouraged Go idiom.
+  directory name. **Deliberately left open**: a correct fix needs the target package's own
+  ACTUAL declared name, which is only knowable for an internal (same-module) import by reading
+  one of that directory's already-indexed files — a cross-file, index-level correction this
+  extractor's per-file `Extract` has no access to. Attempted only as a bounded, additive fix
+  during this pass; deferred rather than risk a bigger resolver-pipeline change for a case this
+  project's own self-hosting measurement has never actually hit.
+- Dot imports (`. "pkg"`) are not resolved — a rare, discouraged Go idiom. Left as a **permanent**
+  gap: `go vet`/linting conventions actively discourage this form in real code, so the ROI of
+  supporting it is low relative to the resolver-pipeline surface it would touch.
 
 ### Extraction and resolution (`internal/parser/csharp`) — ADR-0023
 Measured at 0.0% bug_rate on a real repo (eShopOnWeb, 254 files, 777 entities, 337 resolved
 edges) — these are the documented gaps behind that number, not blockers:
-- No xUnit/NUnit/MSTest test detection — C#'s test frameworks mark a test via an attribute
-  (`[Fact]`, `[Test]`, `[TestMethod]`) on an ordinary method; this extractor does not parse
-  attributes at all yet. The same gap blocks ASP.NET routing-attribute extraction
-  (`[HttpGet]`/`[Route]`) — one real follow-up, not two.
+- ~~No xUnit/NUnit/MSTest test detection~~ **closed**: a method carrying a recognized test
+  attribute (`[Fact]`/`[Theory]`/`[Test]`/`[TestMethod]`, bare or namespace-qualified) is now
+  reclassified as `KindTest` (`test.methodnode` query pattern + `isTestAttribute`'s exact
+  allowlist match, `internal/parser/csharp/extractor.go`) — verified live against eShopOnWeb
+  (`ReturnsHomePageWithProductListing` now resolves as `Test`, not `Method`). ASP.NET
+  routing-attribute extraction (`[HttpGet]`/`[Route]`) reuses the same attribute-parsing
+  machinery but is a distinct follow-up, not done here — it needs the route's own path/verb
+  captured from the attribute's arguments, not just its name.
 - No extension-method resolution (`this` as a first parameter) — a call through an extension
   method never resolves, since the receiver-type tier only searches the receiver's own type.
 - No partial-class support — a class split across multiple files (rare, but real) has its
@@ -191,10 +226,13 @@ Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files
 - No three-level unaliased namespace chain (`import x.y.z` then `x.y.z.member()`) — Python binds
   only the top segment; the chain past that isn't chased, the same bounded scope C#'s
   `Guard.Against.Null` gap already accepts.
-- `self.field = some_parameter` (assigning a constructor's own parameter directly, arguably more
-  idiomatic than re-instantiating in `__init__`) gives no receiver-type signal — only
-  `self.field = SomeClass(...)` does. A present PEP 484 type hint on the parameter is captured but
-  not yet cross-referenced back into this path.
+- ~~`self.field = some_parameter` ... gives no receiver-type signal~~ **closed**: a new query
+  pattern (`receiver.fieldfromparam`) captures the assignment; the Go side cross-references the
+  assigned identifier against the SAME enclosing function's own typed parameters
+  (`paramTypesByFunc`, keyed by function start byte so two different methods' same-named
+  parameter never collide) — silently produces no signal when the parameter has no PEP 484 hint,
+  never guessed from its bare name. Verified unchanged (0.0% bug_rate, 0.86 recall) against
+  django-realworld-example-app.
 - Decorators that rename or replace their target at runtime (`functools.wraps`-based wrappers,
   Django's `@receiver`) are undetectable via syntax alone — a permanent gap in the same category
   as Go's implicit interface satisfaction.

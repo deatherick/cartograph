@@ -211,3 +211,87 @@ func TestExtract_PropertyEntity(t *testing.T) {
 		t.Errorf("missing property entity src/X#Y.Repository, got: %+v", facts.Entities)
 	}
 }
+
+// TestExtract_XUnitFactAttribute_IsKindTest closes a documented gap:
+// C# test frameworks mark a test via an attribute, not a naming
+// convention (unlike Go's TestXxx) — `[Fact]` must reclassify the
+// method as KindTest, and an ordinary method with no such attribute
+// must NOT be misclassified.
+func TestExtract_XUnitFactAttribute_IsKindTest(t *testing.T) {
+	const src = `namespace X {
+  public class OrderServiceTests {
+    [Fact]
+    public void ReturnsOrder() {
+      Assert.NotNull(GetOrder());
+    }
+
+    private Order GetOrder() { return null; }
+  }
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "test-repo", "tests/X/OrderServiceTests.cs", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	kinds := map[string]model.Kind{}
+	for _, ent := range facts.Entities {
+		kinds[ent.Name] = ent.Kind
+	}
+	if got := kinds["ReturnsOrder"]; got != model.KindTest {
+		t.Errorf("got kind %s for [Fact]-attributed ReturnsOrder, want KindTest", got)
+	}
+	if got := kinds["GetOrder"]; got != model.KindMethod {
+		t.Errorf("got kind %s for un-attributed GetOrder, want KindMethod (must not be misclassified)", got)
+	}
+
+	// The call inside the test body must still attribute Ref.Src to the
+	// (now KindTest) entity, exactly as it would for an ordinary method —
+	// scopeByStartByte registration must not be skipped for KindTest.
+	var testID model.EntityID
+	for _, ent := range facts.Entities {
+		if ent.Name == "ReturnsOrder" {
+			testID = ent.ID
+		}
+	}
+	var found bool
+	for _, r := range facts.Refs {
+		if r.Kind == model.RefCall && r.Target.Name == "GetOrder" && r.Src == testID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected GetOrder() inside the test body to attribute Src=%s, refs: %+v", testID, facts.Refs)
+	}
+}
+
+// TestExtract_MSTestQualifiedAttribute_IsKindTest verifies the
+// namespace-qualified attribute form (`[Xunit.Fact]`) is also
+// recognized — isTestAttribute must compare only the last dotted
+// segment, not the whole qualified name.
+func TestExtract_MSTestQualifiedAttribute_IsKindTest(t *testing.T) {
+	const src = `namespace X {
+  public class OrderServiceTests {
+    [Xunit.Fact]
+    public void ReturnsOrder() { }
+  }
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "test-repo", "tests/X/OrderServiceTests.cs", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var found bool
+	for _, ent := range facts.Entities {
+		if ent.Name == "ReturnsOrder" {
+			found = true
+			if ent.Kind != model.KindTest {
+				t.Errorf("got kind %s for [Xunit.Fact]-attributed ReturnsOrder, want KindTest", ent.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected to find a ReturnsOrder entity, got: %+v", facts.Entities)
+	}
+}

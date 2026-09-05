@@ -97,6 +97,25 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 	// fileVarTypesRaw mirrors every other extractor's own file-wide (not
 	// block-scoped) variable-type map.
 	fileVarTypesRaw := map[string][]string{}
+	// paramTypesByFunc maps a function_definition's start byte (see
+	// enclosingFunctionStartByte) to its OWN typed parameters' name->type
+	// map — scoped per-function, unlike fileVarTypesRaw, since two
+	// different methods' same-named parameter could have different types
+	// and `self.attr = some_param` (below) must only ever cross-reference
+	// the SAME method's own parameter, never a same-named one elsewhere
+	// in the file.
+	paramTypesByFunc := map[uint]map[string]string{}
+	// selfFieldFromParam collects every `self.attr = some_param`
+	// assignment seen (queries/entities.scm's receiver.fieldfromparam
+	// doc) for a second pass once paramTypesByFunc is fully populated —
+	// cross-referencing them inline, during this same first pass, would
+	// risk missing a parameter type declared later in iteration order
+	// within the same function (matches carry no guaranteed order).
+	type selfFieldFromParamEntry struct {
+		owner, field, param string
+		funcStartByte       uint
+	}
+	var selfFieldFromParam []selfFieldFromParamEntry
 	scopeByStartByte := map[uint]model.EntityID{}
 	localFuncNames := map[string]bool{}
 
@@ -121,6 +140,25 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 		if n := m.captures["receiver.varname"]; n != nil {
 			if t := m.captures["receiver.vartype"]; t != nil {
 				fileVarTypesRaw[text(src, n)] = append(fileVarTypesRaw[text(src, n)], text(src, t))
+				if funcStart, ok := enclosingFunctionStartByte(n); ok {
+					if paramTypesByFunc[funcStart] == nil {
+						paramTypesByFunc[funcStart] = map[string]string{}
+					}
+					paramTypesByFunc[funcStart][text(src, n)] = text(src, t)
+				}
+			}
+		}
+		if n := m.captures["receiver.fieldnameparam"]; n != nil {
+			selfObj := m.captures["receiver.selfobjectparam"]
+			val := m.captures["receiver.fieldvalueparam"]
+			if selfObj != nil && val != nil && text(src, selfObj) == "self" {
+				if owner, ok := enclosingClassName(n, src); ok {
+					if funcStart, ok := enclosingFunctionStartByte(n); ok {
+						selfFieldFromParam = append(selfFieldFromParam, selfFieldFromParamEntry{
+							owner: owner, field: text(src, n), param: text(src, val), funcStartByte: funcStart,
+						})
+					}
+				}
 			}
 		}
 
@@ -151,6 +189,25 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 		}
 		if allSame {
 			fileVarTypes[name] = types[0]
+		}
+	}
+
+	// Second pass over selfFieldFromParam, now that paramTypesByFunc is
+	// fully populated: cross-reference `self.attr = some_param` against
+	// its OWN enclosing function's typed parameters. Silently produces no
+	// signal when the parameter has no PEP 484 hint — never a guess. The
+	// call-based signal above (`self.attr = SomeClass(...)`) is preferred
+	// when both are somehow present for the same field.
+	for _, e := range selfFieldFromParam {
+		t, ok := paramTypesByFunc[e.funcStartByte][e.param]
+		if !ok {
+			continue
+		}
+		if fieldTypesByOwner[e.owner] == nil {
+			fieldTypesByOwner[e.owner] = map[string]string{}
+		}
+		if _, exists := fieldTypesByOwner[e.owner][e.field]; !exists {
+			fieldTypesByOwner[e.owner][e.field] = t
 		}
 	}
 
@@ -246,6 +303,22 @@ func enclosingClassName(n *sitter.Node, src []byte) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// enclosingFunctionStartByte walks up from n looking for the NEAREST
+// enclosing function_definition and returns its start byte — the key
+// paramTypesByFunc is indexed by, so a `self.attr = some_param`
+// assignment can be cross-referenced against only ITS OWN enclosing
+// function's parameters, never a same-named parameter belonging to a
+// different method entirely.
+func enclosingFunctionStartByte(n *sitter.Node) (uint, bool) {
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		if p.Kind() == "function_definition" {
+			sb, _ := p.ByteRange()
+			return sb, true
+		}
+	}
+	return 0, false
 }
 
 // entityFromMatch converts one collected match into a model.Entity, if

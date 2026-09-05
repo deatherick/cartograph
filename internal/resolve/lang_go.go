@@ -80,12 +80,57 @@ func (p *goPolicy) ResolveUnqualifiedImport(idx *Index, file string, im model.Im
 		Reason: "unreachable: every Go import is namespace-style"}
 }
 
-// FollowImportToMethods: Go has no import-aliasing concept where a
-// same-package type's methods would be reached through the import table —
-// same-package resolution is handled entirely by SameScopeFiles instead
-// (see resolveByReceiverType's core pipeline). Always ok=false.
+// FollowImportToMethods handles a CROSS-package receiver type: a struct
+// field typed `pkg.Type` (`repo *pkg.UserRepo`) is stored by the extractor
+// as the compound string "pkg.Type" (see internal/parser/golang's
+// field.decl.qualified doc), since its methods live in a different
+// directory than the field itself — same-package lookups
+// (fe.methodsByOwner, SameScopeFiles) can never find them. A bare
+// (same-package) receiverType has no "." and is not this function's
+// concern; it returns ok=false immediately, letting resolveByReceiverType
+// fall through to its earlier same-package tiers exactly as before this
+// existed.
 func (p *goPolicy) FollowImportToMethods(idx *Index, file string, fe *fileEntry, receiverType string) (map[string]model.EntityID, bool) {
-	return nil, false
+	dot := strings.LastIndexByte(receiverType, '.')
+	if dot < 0 || fe == nil {
+		return nil, false
+	}
+	pkgAlias, typeName := receiverType[:dot], receiverType[dot+1:]
+
+	var importPath string
+	found := false
+	for _, im := range fe.imports {
+		if im.LocalName == pkgAlias && im.IsNamespace {
+			importPath = im.Source
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, false
+	}
+	dir, internal, dirFound := p.resolveImportPath(idx, importPath)
+	if !internal || !dirFound {
+		// External package, or an internal import whose directory this
+		// index never walked — no methods to offer either way; the
+		// caller falls through to DispositionUnimplemented/ExternalUnknown
+		// as appropriate, never a guess.
+		return nil, false
+	}
+	methods := map[string]model.EntityID{}
+	for _, sibling := range idx.filesByDir[dir] {
+		sf := idx.files[sibling]
+		if sf == nil {
+			continue
+		}
+		for name, id := range sf.methodsByOwner[typeName] {
+			methods[name] = id
+		}
+	}
+	if len(methods) == 0 {
+		return nil, false
+	}
+	return methods, true
 }
 
 // ResolveImportTarget exposes resolveImportPath standalone for

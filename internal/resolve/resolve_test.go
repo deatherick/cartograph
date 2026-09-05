@@ -602,6 +602,67 @@ func TestResolve_Go_ReceiverTypeThroughStructField(t *testing.T) {
 	}
 }
 
+// TestResolve_Go_ReceiverTypeThroughCrossPackageStructField closes a
+// documented gap: a struct field typed via `pkg.Type` (cross-package) —
+// the extractor stores this as the compound ReceiverType "repo.UserRepo"
+// (internal/parser/golang's field.decl.qualified doc) — must resolve a
+// call through that field to the REAL method, in the OTHER package's
+// directory, via FollowImportToMethods; not fall back to
+// DispositionUnimplemented the way it did before this existed.
+func TestResolve_Go_ReceiverTypeThroughCrossPackageStructField(t *testing.T) {
+	idx := goIndex("example.com/m")
+
+	methodEnt := goEntity(model.KindMethod, "internal/repo#UserRepo.FindByEmail", "FindByEmail")
+	repoFacts := &model.FileFacts{Lang: model.LangGo, File: "internal/repo/repo.go", Entities: []model.Entity{methodEnt}}
+
+	callerFacts := &model.FileFacts{
+		Lang: model.LangGo,
+		File: "internal/svc/service.go",
+		Imports: []model.ImportBinding{
+			{LocalName: "repo", Source: "example.com/m/internal/repo", IsNamespace: true},
+		},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "userRepo", Member: "FindByEmail", ReceiverType: "repo.UserRepo"}},
+		},
+	}
+	idx.AddFile(repoFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected cross-package receiver-type resolution, got %+v", got)
+	}
+	if got[0].Edge.Dst != methodEnt.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, methodEnt.ID)
+	}
+}
+
+// TestResolve_Go_ReceiverTypeThroughCrossPackageStructField_ExternalPackage
+// verifies FollowImportToMethods correctly declines (ok=false) rather than
+// panicking or guessing when the compound ReceiverType's package alias
+// points at an external (non-module) import — falls through to the same
+// DispositionExternalUnknown a same-package receiver-type miss gets.
+func TestResolve_Go_ReceiverTypeThroughCrossPackageStructField_ExternalPackage(t *testing.T) {
+	idx := goIndex("example.com/m")
+
+	callerFacts := &model.FileFacts{
+		Lang: model.LangGo,
+		File: "internal/svc/service.go",
+		Imports: []model.ImportBinding{
+			{LocalName: "sql", Source: "database/sql", IsNamespace: true},
+		},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "db", Member: "Query", ReceiverType: "sql.DB"}},
+		},
+	}
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionExternalUnknown {
+		t.Fatalf("expected ExternalUnknown for a receiver type from an external package, got %+v", got)
+	}
+}
+
 func TestResolve_Go_UnresolvedBareName_IsBugExtractorNotExternal(t *testing.T) {
 	// Unlike TypeScript, Go has no implicit unqualified globals — a bare
 	// call that isn't same-file, same-package, or a predeclared identifier

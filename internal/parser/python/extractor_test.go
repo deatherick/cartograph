@@ -206,3 +206,65 @@ class Article(TimestampedModel):
 		t.Errorf("got import %+v, want Source=..core.models ImportedName=TimestampedModel", im)
 	}
 }
+
+// TestExtract_SelfFieldAssignedFromTypedParameter closes a documented
+// gap: `self.repository = repository` (assigning a constructor's own
+// parameter directly) gave no receiver-type signal before — only
+// `self.repository = Repository()` did. With a PEP 484 type hint on the
+// parameter, a call through the resulting field must now resolve.
+func TestExtract_SelfFieldAssignedFromTypedParameter(t *testing.T) {
+	const src = `class ArticleService:
+    def __init__(self, repository: Repository):
+        self.repository = repository
+
+    def get_article(self, id):
+        return self.repository.find_by_id(id)
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "test-repo", "services.py", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var found bool
+	for _, r := range facts.Refs {
+		if r.Kind == model.RefCall && r.Target.Member == "find_by_id" {
+			found = true
+			if r.Target.ReceiverType != "Repository" {
+				t.Errorf("got ReceiverType %q, want %q", r.Target.ReceiverType, "Repository")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a find_by_id call ref, got: %+v", facts.Refs)
+	}
+}
+
+// TestExtract_SelfFieldAssignedFromUntypedParameter_NoSignal verifies the
+// same idiom WITHOUT a type hint produces no ReceiverType (never guessed
+// from the parameter's bare name).
+func TestExtract_SelfFieldAssignedFromUntypedParameter_NoSignal(t *testing.T) {
+	const src = `class ArticleService:
+    def __init__(self, repository):
+        self.repository = repository
+
+    def get_article(self, id):
+        return self.repository.find_by_id(id)
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "test-repo", "services.py", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var found bool
+	for _, r := range facts.Refs {
+		if r.Kind == model.RefCall && r.Target.Member == "find_by_id" {
+			found = true
+			if r.Target.ReceiverType != "" {
+				t.Errorf("got ReceiverType %q, want empty (no type hint present, must not be guessed)", r.Target.ReceiverType)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a find_by_id call ref, got: %+v", facts.Refs)
+	}
+}

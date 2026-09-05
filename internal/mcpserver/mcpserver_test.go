@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/deatherick/cartograph/internal/project"
 	"github.com/deatherick/cartograph/internal/service"
 )
 
@@ -86,6 +87,32 @@ func TestMCPServer_ListTools(t *testing.T) {
 		if !got[name] {
 			t.Errorf("expected tool %q to be registered, got tools: %v", name, got)
 		}
+	}
+}
+
+// TestMCPServer_ResolvesRegisteredProjectName closes docs/MVP.md's own
+// "MCP's tools still don't resolve a registered name either (their root
+// argument stays 'absolute path' only)" gap — every handler now runs
+// args.Root through project.Resolve first, the same as every `ctx` CLI
+// command already does.
+func TestMCPServer_ResolvesRegisteredProjectName(t *testing.T) {
+	cs := connect(t)
+	root := fixtureRoot(t)
+	if err := project.Add("ts-basic-registered", root); err != nil {
+		t.Fatalf("project.Add: %v", err)
+	}
+
+	indexRes := callTool(t, cs, "context_index", map[string]any{"root": "ts-basic-registered"})
+	if indexRes.IsError {
+		t.Fatalf("context_index returned an error: %s", textOf(t, indexRes))
+	}
+
+	findRes := callTool(t, cs, "context_find", map[string]any{"root": "ts-basic-registered", "name": "UserService"})
+	if findRes.IsError {
+		t.Fatalf("context_find returned an error: %s", textOf(t, findRes))
+	}
+	if !strings.Contains(textOf(t, findRes), "UserService") {
+		t.Errorf("expected find output to mention UserService when root is a registered name, got: %s", textOf(t, findRes))
 	}
 }
 
