@@ -1,7 +1,9 @@
 # ADR-0026: Phase 9 — global install and system-level daemon
 
-- **Status**: Accepted (core built and tested; a real release/live service-install verification
-  still needs the user's explicit go-ahead — see "What still needs a human decision" below)
+- **Status**: Accepted and released. `v0.1.0` was tagged and published later the same day, at a
+  separate explicit follow-up request ("Haz lo de las versiones del release") — see "Update:
+  v0.1.0 released" at the end of this ADR. A live `ctx service install` verification on a real
+  machine remains the one item still needing the user's own go-ahead.
 - **Date**: 2026-09-05
 - **Related**: `docs/requirements/phase9-global-install-and-daemon.md` (the requirements this
   implements, reviewed and refined earlier the same day), ADR-0016 (project registry), ADR-0019
@@ -95,10 +97,8 @@ activating it requires.
 
 ## What still needs a human decision — not built without it
 
-- **Cutting an actual `vX.Y.Z` release** (pushing a tag) is what makes `install.sh`'s download
-  path real instead of falling back to source-build — a real, visible, public action (a GitHub
-  Release with downloadable binaries) this ADR does not take unilaterally. A version number and
-  timing are the user's call.
+- ~~Cutting an actual `vX.Y.Z` release~~ — **done, same day**: `v0.1.0` tagged and released at a
+  separate, explicit follow-up request. See "Update: v0.1.0 released" below.
 - **Actually running `ctx service install` on a real machine** registers a real, persistent
   background service (a `launchd` agent that survives reboots, or a `systemd --user` unit) — every
   code path is unit-tested with a fake command runner (Decision 2), but a true end-to-end live
@@ -129,9 +129,8 @@ reading the code.
 
 ## What this is explicitly NOT
 
-- **Not a cut release.** No `vX.Y.Z` tag has been pushed; `install.sh`'s download path has never
-  actually downloaded a real binary end-to-end (see "What still needs a human decision").
-- **Not an activated Homebrew tap.** A template only.
+- **Not an activated Homebrew tap.** A template only (`packaging/homebrew/cartograph.rb.template`)
+  — needs its own separate `homebrew-tap` repository, not created without being asked to.
 - **Not Windows support.** Explicitly out of scope, per the requirements doc's own prior decision.
 - **Not a write-capable HTTP endpoint for project registration.** The requirements doc's OTHER
   named option (extending `internal/httpserver` with `POST`/`DELETE /api/projects`) was not built
@@ -139,3 +138,24 @@ reading the code.
   alternative if polling's 5-second latency ever proves too slow for a real use case.
 - **Not a live end-to-end launchd/systemd verification on a real machine** — every unit test uses a
   fake command runner; see "What still needs a human decision."
+
+## Update: v0.1.0 released
+
+Same day, in a separate, explicit follow-up message ("Haz lo de las versiones del release"): tagged
+and pushed `v0.1.0`, which triggered `.github/workflows/release.yml` for the first time for real —
+both `build` jobs (macos-latest → darwin/arm64, ubuntu-latest → linux/amd64) and the `release` job
+succeeded, publishing `cartograph_darwin_arm64.tar.gz`, `cartograph_linux_amd64.tar.gz`, and
+`checksums.txt` to a real GitHub Release: <https://github.com/deatherick/cartograph/releases/tag/v0.1.0>.
+
+`install.sh` was then run for real (into a throwaway directory, not the actual `PATH`) against
+this real release — not a rerun of the earlier "no release exists" fallback path this ADR
+originally verified, a genuinely different code path: it downloaded
+`cartograph_darwin_arm64.tar.gz`, extracted it, and the resulting `ctx` binary was executed and
+printed its real usage output. This is the first time this project's install path has been
+verified end-to-end against a real, published artifact rather than argued to work from reading the
+code or from the empty-release fallback message.
+
+**Still not done, unchanged from this ADR's original scope**: the Homebrew tap (needs its own
+repository), and a live `ctx service install` run on a real machine (registers a real, persistent
+background service — still the one item needing the user's own separate go-ahead before this ADR's
+author runs it).
