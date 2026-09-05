@@ -29,6 +29,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/deatherick/cartograph/internal/model"
+	"github.com/deatherick/cartograph/internal/project"
 	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
 	"github.com/deatherick/cartograph/internal/similar"
@@ -137,12 +138,13 @@ func errorResult[Out any](err error) (*mcp.CallToolResult, Out, error) { //nolin
 }
 
 type indexArgs struct {
-	Root string `json:"root" jsonschema:"absolute path to the repository to index"`
+	Root string `json:"root" jsonschema:"absolute path to the repository to index, or a name registered via ctx project add"`
 }
 
 func indexHandler(svc *service.Service) mcp.ToolHandlerFor[indexArgs, any] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args indexArgs) (*mcp.CallToolResult, any, error) {
-		stats, err := svc.Index(ctx, args.Root, service.RepoName(args.Root))
+		root := project.Resolve(args.Root)
+		stats, err := svc.Index(ctx, root, service.RepoName(root))
 		if err != nil {
 			return errorResult[any](err)
 		}
@@ -151,19 +153,21 @@ func indexHandler(svc *service.Service) mcp.ToolHandlerFor[indexArgs, any] {
 }
 
 type compileArgs struct {
-	Root      string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root      string `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 	Task      string `json:"task" jsonschema:"free-text description of the task to compile context for"`
 	Budget    int    `json:"budget,omitempty" jsonschema:"token budget for the capsule (default 2500)"`
 	SessionID string `json:"session_id,omitempty" jsonschema:"session identifier for the Context Ledger; repeat calls with the same id avoid re-sending already-delivered entities"`
+	File      string `json:"file,omitempty" jsonschema:"substring to scope seeding to entities in matching files only"`
 }
 
 func compileHandler(svc *service.Service) mcp.ToolHandlerFor[compileArgs, any] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args compileArgs) (*mcp.CallToolResult, any, error) {
+		root := project.Resolve(args.Root)
 		budget := args.Budget
 		if budget <= 0 {
 			budget = 2500
 		}
-		capsule, err := svc.Context(args.Root, service.RepoName(args.Root), args.Task, budget, args.SessionID)
+		capsule, err := svc.ContextScoped(root, service.RepoName(root), args.Task, budget, args.SessionID, args.File)
 		if err != nil {
 			return errorResult[any](err)
 		}
@@ -172,7 +176,7 @@ func compileHandler(svc *service.Service) mcp.ToolHandlerFor[compileArgs, any] {
 }
 
 type findArgs struct {
-	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 	Name string `json:"name" jsonschema:"bare name, or qualified name (containing '#'), of the entity to find"`
 }
 
@@ -185,7 +189,8 @@ type findResult struct {
 
 func findHandler(svc *service.Service) mcp.ToolHandlerFor[findArgs, findResult] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args findArgs) (*mcp.CallToolResult, findResult, error) {
-		entities, err := svc.Find(args.Root, service.RepoName(args.Root), args.Name)
+		root := project.Resolve(args.Root)
+		entities, err := svc.Find(root, service.RepoName(root), args.Name)
 		if err != nil {
 			return errorResult[findResult](err)
 		}
@@ -194,14 +199,15 @@ func findHandler(svc *service.Service) mcp.ToolHandlerFor[findArgs, findResult] 
 }
 
 type inspectArgs struct {
-	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 	Name string `json:"name" jsonschema:"bare name of the entity to inspect"`
 	File string `json:"file,omitempty" jsonschema:"substring to disambiguate when name matches entities in more than one file"`
 }
 
 func inspectHandler(svc *service.Service) mcp.ToolHandlerFor[inspectArgs, service.Inspection] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args inspectArgs) (*mcp.CallToolResult, service.Inspection, error) {
-		insp, err := svc.Inspect(args.Root, service.RepoName(args.Root), args.Name, args.File)
+		root := project.Resolve(args.Root)
+		insp, err := svc.Inspect(root, service.RepoName(root), args.Name, args.File)
 		if err != nil {
 			return errorResult[service.Inspection](err)
 		}
@@ -210,7 +216,7 @@ func inspectHandler(svc *service.Service) mcp.ToolHandlerFor[inspectArgs, servic
 }
 
 type relatedArgs struct {
-	Root  string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root  string `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 	Name  string `json:"name" jsonschema:"bare name of the entity to start from"`
 	File  string `json:"file,omitempty" jsonschema:"substring to disambiguate when name matches entities in more than one file"`
 	Depth int    `json:"depth,omitempty" jsonschema:"graph traversal depth in hops (default 2)"`
@@ -223,11 +229,12 @@ type relatedResult struct {
 
 func relatedHandler(svc *service.Service) mcp.ToolHandlerFor[relatedArgs, relatedResult] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args relatedArgs) (*mcp.CallToolResult, relatedResult, error) {
+		root := project.Resolve(args.Root)
 		depth := args.Depth
 		if depth <= 0 {
 			depth = 2
 		}
-		related, err := svc.Related(args.Root, service.RepoName(args.Root), args.Name, args.File, depth)
+		related, err := svc.Related(root, service.RepoName(root), args.Name, args.File, depth)
 		if err != nil {
 			return errorResult[relatedResult](err)
 		}
@@ -236,7 +243,7 @@ func relatedHandler(svc *service.Service) mcp.ToolHandlerFor[relatedArgs, relate
 }
 
 type sourceArgs struct {
-	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 	Name string `json:"name" jsonschema:"bare name of the entity whose source to read"`
 	File string `json:"file,omitempty" jsonschema:"substring to disambiguate when name matches entities in more than one file"`
 }
@@ -248,7 +255,8 @@ type sourceResult struct {
 
 func sourceHandler(svc *service.Service) mcp.ToolHandlerFor[sourceArgs, sourceResult] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args sourceArgs) (*mcp.CallToolResult, sourceResult, error) {
-		src, e, err := svc.Source(args.Root, service.RepoName(args.Root), args.Name, args.File)
+		root := project.Resolve(args.Root)
+		src, e, err := svc.Source(root, service.RepoName(root), args.Name, args.File)
 		if err != nil {
 			return errorResult[sourceResult](err)
 		}
@@ -257,7 +265,7 @@ func sourceHandler(svc *service.Service) mcp.ToolHandlerFor[sourceArgs, sourceRe
 }
 
 type impactArgs struct {
-	Root    string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root    string `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 	Name    string `json:"name,omitempty" jsonschema:"bare name of the entity to analyze; omit when using git_diff instead"`
 	File    string `json:"file,omitempty" jsonschema:"substring to disambiguate when name matches entities in more than one file"`
 	GitDiff string `json:"git_diff,omitempty" jsonschema:"analyze every entity a git diff touched instead of one named entity; the ref to diff against (default HEAD) — pass \"HEAD\" explicitly, or e.g. \"HEAD~3\", to select this mode"`
@@ -275,14 +283,15 @@ type impactResult struct {
 
 func impactHandler(svc *service.Service) mcp.ToolHandlerFor[impactArgs, impactResult] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args impactArgs) (*mcp.CallToolResult, impactResult, error) {
+		root := project.Resolve(args.Root)
 		if args.Name == "" {
-			result, err := svc.ImpactFromGitDiff(args.Root, service.RepoName(args.Root), args.GitDiff, args.Depth)
+			result, err := svc.ImpactFromGitDiff(root, service.RepoName(root), args.GitDiff, args.Depth)
 			if err != nil {
 				return errorResult[impactResult](err)
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: render.GitDiffImpact(result)}}}, impactResult{GitDiffImpact: &result}, nil
 		}
-		result, err := svc.Impact(args.Root, service.RepoName(args.Root), args.Name, args.File, args.Depth)
+		result, err := svc.Impact(root, service.RepoName(root), args.Name, args.File, args.Depth)
 		if err != nil {
 			return errorResult[impactResult](err)
 		}
@@ -291,12 +300,13 @@ func impactHandler(svc *service.Service) mcp.ToolHandlerFor[impactArgs, impactRe
 }
 
 type statsArgs struct {
-	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 }
 
 func statsHandler(svc *service.Service) mcp.ToolHandlerFor[statsArgs, service.Stats] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args statsArgs) (*mcp.CallToolResult, service.Stats, error) {
-		stats, err := svc.Stats(args.Root, service.RepoName(args.Root))
+		root := project.Resolve(args.Root)
+		stats, err := svc.Stats(root, service.RepoName(root))
 		if err != nil {
 			return errorResult[service.Stats](err)
 		}
@@ -305,7 +315,7 @@ func statsHandler(svc *service.Service) mcp.ToolHandlerFor[statsArgs, service.St
 }
 
 type pathArgs struct {
-	Root     string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root     string `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 	From     string `json:"from" jsonschema:"bare name of the entity to start from"`
 	FromFile string `json:"from_file,omitempty" jsonschema:"substring to disambiguate when from matches entities in more than one file"`
 	To       string `json:"to" jsonschema:"bare name of the entity to reach"`
@@ -314,7 +324,8 @@ type pathArgs struct {
 
 func pathHandler(svc *service.Service) mcp.ToolHandlerFor[pathArgs, service.PathResult] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args pathArgs) (*mcp.CallToolResult, service.PathResult, error) {
-		result, err := svc.Path(args.Root, service.RepoName(args.Root), args.From, args.FromFile, args.To, args.ToFile)
+		root := project.Resolve(args.Root)
+		result, err := svc.Path(root, service.RepoName(root), args.From, args.FromFile, args.To, args.ToFile)
 		if err != nil {
 			return errorResult[service.PathResult](err)
 		}
@@ -323,7 +334,7 @@ func pathHandler(svc *service.Service) mcp.ToolHandlerFor[pathArgs, service.Path
 }
 
 type similarArgs struct {
-	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root string `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 	Name string `json:"name" jsonschema:"bare name of the entity to find similarity/duplicate candidates for"`
 	File string `json:"file,omitempty" jsonschema:"substring to disambiguate when name matches entities in more than one file"`
 }
@@ -337,7 +348,8 @@ type similarResult struct {
 
 func similarHandler(svc *service.Service) mcp.ToolHandlerFor[similarArgs, similarResult] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args similarArgs) (*mcp.CallToolResult, similarResult, error) {
-		pairs, match, err := svc.Similar(args.Root, service.RepoName(args.Root), args.Name, args.File)
+		root := project.Resolve(args.Root)
+		pairs, match, err := svc.Similar(root, service.RepoName(root), args.Name, args.File)
 		if err != nil {
 			return errorResult[similarResult](err)
 		}
@@ -347,7 +359,7 @@ func similarHandler(svc *service.Service) mcp.ToolHandlerFor[similarArgs, simila
 }
 
 type duplicatesArgs struct {
-	Root      string  `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root      string  `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 	Threshold float64 `json:"threshold,omitempty" jsonschema:"minimum overall score 0..1 a pair must clear (default 0.6)"`
 }
 
@@ -357,7 +369,8 @@ type duplicatesResult struct {
 
 func duplicatesHandler(svc *service.Service) mcp.ToolHandlerFor[duplicatesArgs, duplicatesResult] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args duplicatesArgs) (*mcp.CallToolResult, duplicatesResult, error) {
-		pairs, err := svc.Duplicates(args.Root, service.RepoName(args.Root), args.Threshold)
+		root := project.Resolve(args.Root)
+		pairs, err := svc.Duplicates(root, service.RepoName(root), args.Threshold)
 		if err != nil {
 			return errorResult[duplicatesResult](err)
 		}
@@ -367,7 +380,7 @@ func duplicatesHandler(svc *service.Service) mcp.ToolHandlerFor[duplicatesArgs, 
 }
 
 type decideArgs struct {
-	Root     string `json:"root" jsonschema:"absolute path to an already-indexed repository"`
+	Root     string `json:"root" jsonschema:"absolute path to an already-indexed repository, or a name registered via ctx project add"`
 	NameA    string `json:"name_a" jsonschema:"bare name of the first entity in the pair"`
 	FileA    string `json:"file_a,omitempty" jsonschema:"substring to disambiguate name_a"`
 	NameB    string `json:"name_b" jsonschema:"bare name of the second entity in the pair"`
@@ -381,11 +394,12 @@ type decideResult struct {
 
 func decideHandler(svc *service.Service) mcp.ToolHandlerFor[decideArgs, decideResult] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args decideArgs) (*mcp.CallToolResult, decideResult, error) {
+		root := project.Resolve(args.Root)
 		decision, ok := similar.ParseDecision(args.Decision)
 		if !ok {
 			return errorResult[decideResult](fmt.Errorf("%q is not a valid decision — must be one of: %s", args.Decision, similar.ValidDecisions()))
 		}
-		if err := svc.Decide(args.Root, service.RepoName(args.Root), args.NameA, args.FileA, args.NameB, args.FileB, decision); err != nil {
+		if err := svc.Decide(root, service.RepoName(root), args.NameA, args.FileA, args.NameB, args.FileB, decision); err != nil {
 			return errorResult[decideResult](err)
 		}
 		text := fmt.Sprintf("recorded: %s <-> %s = %s\n", args.NameA, args.NameB, decision)

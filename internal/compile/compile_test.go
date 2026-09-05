@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/deatherick/cartograph/internal/index"
@@ -57,6 +58,37 @@ func TestCompile_SeedsOnExactNameMatch(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected 'register' to seed as a primary item, got items: %+v", cap.Items)
+	}
+}
+
+// TestCompile_FileFilterScopesSeeding closes docs/MVP.md's own "a task
+// capsule can't currently be scoped to 'only consider files matching X'"
+// gap — fixtures/ts-basic has a `register` method in BOTH
+// controllers/userController.ts and services/userService.ts, so
+// FileFilter="services" must seed only the latter.
+func TestCompile_FileFilterScopesSeeding(t *testing.T) {
+	root := setupSnapshot(t)
+	cap, err := Compile(root, "ts-basic", "fix a bug in register", Options{Budget: 2000, FileFilter: "services"})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	for _, it := range cap.Items {
+		if it.Category != "primary" {
+			continue
+		}
+		if !strings.Contains(it.Entity.Anchor.File, "services") {
+			t.Errorf("expected every primary (seed) item to come from a file matching %q, got %s (file %s)",
+				"services", it.Entity.Name, it.Entity.Anchor.File)
+		}
+	}
+	var sawServiceRegister bool
+	for _, it := range cap.Items {
+		if it.Entity.Name == "register" && strings.Contains(it.Entity.Anchor.File, "services") {
+			sawServiceRegister = true
+		}
+	}
+	if !sawServiceRegister {
+		t.Fatalf("expected services/userService.ts's own register to still seed, got items: %+v", cap.Items)
 	}
 }
 
