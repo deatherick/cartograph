@@ -113,6 +113,27 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 		pending = append(pending, collectCaptures(m, names))
 	}
 
+	// testMethodStartBytes marks every method_declaration node (by start
+	// byte) carrying a recognized xUnit/NUnit/MSTest attribute
+	// (queries/entities.scm's test.methodnode doc) — collected in its own
+	// pass, separate from the entity-producing loop below, since the
+	// test.methodnode match carrying @test.attr and the entity.method
+	// match producing the actual KindMethod entity are two INDEPENDENT
+	// query matches for the same underlying node, in no guaranteed order
+	// within `pending`.
+	testMethodStartBytes := map[uint]bool{}
+	for _, m := range pending {
+		attr := m.captures["test.attr"]
+		node := m.captures["test.methodnode"]
+		if attr == nil || node == nil {
+			continue
+		}
+		if isTestAttribute(text(src, attr)) {
+			sb, _ := node.ByteRange()
+			testMethodStartBytes[sb] = true
+		}
+	}
+
 	for _, m := range pending {
 		if n := m.captures["receiver.fieldname"]; n != nil {
 			if t := m.captures["receiver.fieldtype"]; t != nil {
@@ -133,12 +154,12 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 			localFuncNames[text(src, n)] = true
 		}
 
-		ent, id, ok := entityFromMatch(repo, file, dir, src, m)
+		ent, id, ok := entityFromMatch(repo, file, dir, src, m, testMethodStartBytes)
 		if !ok {
 			continue
 		}
 		facts.Entities = append(facts.Entities, ent)
-		if ent.Kind == model.KindMethod {
+		if ent.Kind == model.KindMethod || ent.Kind == model.KindTest {
 			scopeByStartByte[ent.Anchor.StartByte] = id
 		}
 	}
@@ -208,6 +229,32 @@ func baseTypeName(src []byte, n *sitter.Node) string {
 	return text(src, n)
 }
 
+// testAttributeNames is the exact allowlist of xUnit/NUnit/MSTest
+// test-method attribute names this extractor recognizes — both the bare
+// form real code overwhelmingly uses (`[Fact]`) and the full form C#
+// attribute syntax also permits (`[FactAttribute]`), matched exactly
+// (whitelist, never a suffix/substring guess — this project's own
+// anti-inference discipline, ADR-0023).
+var testAttributeNames = map[string]bool{
+	"Fact": true, "FactAttribute": true, // xUnit
+	"Theory": true, "TheoryAttribute": true, // xUnit
+	"Test": true, "TestAttribute": true, // NUnit
+	"TestMethod": true, "TestMethodAttribute": true, // MSTest
+}
+
+// isTestAttribute reports whether attrText (an attribute's captured
+// name — an identifier like "Fact", or a namespace-qualified name like
+// "Xunit.Fact") names a known test-method attribute. Only the LAST
+// dotted segment is compared, since a qualified attribute name is always
+// "<namespace...>.<AttributeName>" — an exact match against
+// testAttributeNames either way, never a guess.
+func isTestAttribute(attrText string) bool {
+	if i := strings.LastIndexByte(attrText, '.'); i >= 0 {
+		attrText = attrText[i+1:]
+	}
+	return testAttributeNames[attrText]
+}
+
 // enclosingTypeName walks up from n looking for the nearest enclosing
 // type declaration (class/struct/record/interface) and returns its
 // declared name — the C# analog of Go's enclosingTypeSpecName, used to
@@ -245,8 +292,13 @@ func anchorFrom(file string, src []byte, n *sitter.Node) model.Anchor {
 }
 
 // entityFromMatch converts one collected match into a model.Entity, if
-// the match is one of the entity-producing patterns.
-func entityFromMatch(repo, file, dir string, src []byte, m match) (model.Entity, model.EntityID, bool) {
+// the match is one of the entity-producing patterns. testMethodStartBytes
+// (queries/entities.scm's test.methodnode doc) reclassifies an
+// otherwise-ordinary method_declaration as KindTest when it carries a
+// recognized xUnit/NUnit/MSTest attribute — the C# analog of Go's own
+// isGoTestName-based reclassification, done by attribute here since C#
+// tests have no naming convention to key off of.
+func entityFromMatch(repo, file, dir string, src []byte, m match, testMethodStartBytes map[uint]bool) (model.Entity, model.EntityID, bool) {
 	var kind model.Kind
 	var node *sitter.Node
 	switch {
@@ -264,6 +316,12 @@ func entityFromMatch(repo, file, dir string, src []byte, m match) (model.Entity,
 		kind, node = model.KindProperty, m.captures["entity.property"]
 	default:
 		return model.Entity{}, "", false
+	}
+
+	if kind == model.KindMethod {
+		if sb, _ := node.ByteRange(); testMethodStartBytes[sb] {
+			kind = model.KindTest
+		}
 	}
 
 	nameNode := m.captures["entity.name"]
@@ -291,7 +349,7 @@ func entityFromMatch(repo, file, dir string, src []byte, m match) (model.Entity,
 
 	qualified := dir + "#" + name
 	disambiguator := ""
-	if kind == model.KindMethod || kind == model.KindProperty {
+	if kind == model.KindMethod || kind == model.KindProperty || kind == model.KindTest {
 		owner, ok := enclosingTypeName(nameNode, src)
 		if !ok {
 			// A method/property with no enclosing type (shouldn't happen
@@ -302,7 +360,7 @@ func entityFromMatch(repo, file, dir string, src []byte, m match) (model.Entity,
 		}
 		qualified = dir + "#" + owner + "." + name
 	}
-	if kind == model.KindMethod {
+	if kind == model.KindMethod || kind == model.KindTest {
 		params := m.captures["entity.params"]
 		arity := 0
 		if params != nil {

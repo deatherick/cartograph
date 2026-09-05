@@ -66,6 +66,21 @@
   type: [(identifier) (generic_name)] @entity.proptype
   name: (identifier) @entity.name) @entity.property
 
+; xUnit/NUnit/MSTest test-method detection via attributes: `[Fact]`,
+; `[Theory]`, `[Test]`, `[TestMethod]` (bare or namespace-qualified,
+; `[Xunit.Fact]`). attribute_list is an unnamed, positional child of
+; method_declaration (grammar.js) — captured generically (ANY attribute
+; on ANY method), filtered against a known allowlist in Go
+; (isTestAttribute) rather than narrowed here, the same "capture broadly,
+; filter by exact name in Go" split TypeScript's test.fn capture already
+; uses. A method can carry multiple attribute_lists/attributes, so this
+; may produce more than one match per test method — harmless, since Go
+; only checks set membership by the method's own start byte.
+(method_declaration
+  (attribute_list
+    (attribute
+      name: [(identifier) (qualified_name)] @test.attr))) @test.methodnode
+
 ; Local functions (C# 7+): `void DoThing() { ... }` declared inside a
 ; method body. Genuinely local — never cross-resolved (model.ScopeLocal),
 ; the same role Go's localfunc.decl patterns play for closures; a bare

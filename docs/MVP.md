@@ -188,10 +188,14 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
 ### Extraction and resolution (`internal/parser/csharp`) — ADR-0023
 Measured at 0.0% bug_rate on a real repo (eShopOnWeb, 254 files, 777 entities, 337 resolved
 edges) — these are the documented gaps behind that number, not blockers:
-- No xUnit/NUnit/MSTest test detection — C#'s test frameworks mark a test via an attribute
-  (`[Fact]`, `[Test]`, `[TestMethod]`) on an ordinary method; this extractor does not parse
-  attributes at all yet. The same gap blocks ASP.NET routing-attribute extraction
-  (`[HttpGet]`/`[Route]`) — one real follow-up, not two.
+- ~~No xUnit/NUnit/MSTest test detection~~ **closed**: a method carrying a recognized test
+  attribute (`[Fact]`/`[Theory]`/`[Test]`/`[TestMethod]`, bare or namespace-qualified) is now
+  reclassified as `KindTest` (`test.methodnode` query pattern + `isTestAttribute`'s exact
+  allowlist match, `internal/parser/csharp/extractor.go`) — verified live against eShopOnWeb
+  (`ReturnsHomePageWithProductListing` now resolves as `Test`, not `Method`). ASP.NET
+  routing-attribute extraction (`[HttpGet]`/`[Route]`) reuses the same attribute-parsing
+  machinery but is a distinct follow-up, not done here — it needs the route's own path/verb
+  captured from the attribute's arguments, not just its name.
 - No extension-method resolution (`this` as a first parameter) — a call through an extension
   method never resolves, since the receiver-type tier only searches the receiver's own type.
 - No partial-class support — a class split across multiple files (rare, but real) has its
