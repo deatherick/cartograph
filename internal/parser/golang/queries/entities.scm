@@ -95,6 +95,26 @@
   name: (field_identifier)? @field.name
   type: (pointer_type (type_identifier) @field.type)) @field.decl.ptr
 
+; A NAMED field typed from another package via `pkg.Type` (`repo
+; *pkg.UserRepo`) — closes a documented gap: only bare type_identifier
+; fields produced a receiver-type signal before. `name` is required (not
+; optional, unlike field.decl/field.decl.ptr above) so this never matches
+; an anonymous embedded field of a qualified type (`pkg.Base` with no
+; field name) — that shape stays unhandled rather than risk misreporting
+; it as a same-package RefExtends target.
+(field_declaration
+  name: (field_identifier) @field.name
+  type: (qualified_type
+    package: (package_identifier) @field.pkg
+    name: (type_identifier) @field.type)) @field.decl.qualified
+
+(field_declaration
+  name: (field_identifier) @field.name
+  type: (pointer_type
+    (qualified_type
+      package: (package_identifier) @field.pkg
+      name: (type_identifier) @field.type))) @field.decl.qualified.ptr
+
 ; Call sites, bare and qualified. Go's grammar does not distinguish
 ; syntactically between `pkg.Func()` (package-qualified) and
 ; `receiver.Method()` (method call through a value) — both are

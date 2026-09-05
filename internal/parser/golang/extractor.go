@@ -124,7 +124,17 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 					structFieldTypes[owner] = map[string]string{}
 				}
 				if fname != nil {
-					structFieldTypes[owner][text(src, fname)] = text(src, m.captures["field.type"])
+					ftype := text(src, m.captures["field.type"])
+					if pkg := m.captures["field.pkg"]; pkg != nil {
+						// A cross-package field type (`repo *pkg.UserRepo`):
+						// stored as "pkgAlias.TypeName" so the resolver's
+						// receiver-type tier (lang_go.go's
+						// FollowImportToMethods) can split it back apart and
+						// look the type up through the import table, rather
+						// than in this file's own same-package method index.
+						ftype = text(src, pkg) + "." + ftype
+					}
+					structFieldTypes[owner][text(src, fname)] = ftype
 				}
 			}
 		}

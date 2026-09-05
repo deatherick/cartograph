@@ -153,17 +153,37 @@ entities, 1,916 dispositions) — these are the documented gaps behind that numb
 - A local variable's function type inferred from a multi-return call's second value (`ctx, cancel
   := context.WithTimeout(...)`) is not detected — only a syntactic func literal or a func-typed
   annotation is. The one remaining bug-extractor case in the self-hosting measurement.
-- Struct fields typed from another package via `pkg.Type` (`repo *pkg.UserRepo`) produce no
-  receiver-type signal — only bare `type_identifier` fields do. A call through such a field
-  resolves to `DispositionUnimplemented`, not a wrong answer.
+  **Deliberately left open**: closing it correctly needs the REAL declared return type of
+  whatever function is being called; for a std-lib/external call (like `context.WithTimeout`)
+  that means either full type-checking (out of scope for a tree-sitter-query extractor) or a
+  hand-maintained table of known external functions' return types — the latter is itself a form
+  of the guessing this project's own anti-inference discipline rejects (a hardcoded fact about
+  ONE external function, not a general rule), so it's left as a documented gap rather than
+  patched with a special case.
+- ~~Struct fields typed from another package via `pkg.Type` ... produce no receiver-type
+  signal~~ **closed**: a named field's qualified type (`repo *pkg.UserRepo`) is now captured
+  (`field.decl.qualified`/`field.decl.qualified.ptr`) and stored as the compound string
+  `"pkgAlias.TypeName"`; the resolver's `FollowImportToMethods` (`internal/resolve/lang_go.go`)
+  splits it, resolves the alias through the file's own import table to a directory, and looks the
+  method up there — exact matches only, same discipline as every other tier. An anonymous
+  (embedded) field of a qualified type is deliberately NOT matched by the same query (kept
+  `field.name` required, not optional) — that shape stays an unhandled gap rather than risk a
+  wrongly-scoped `RefExtends` target.
 - No export-awareness — same gap as TypeScript's resolver, not fixed twice.
 - Go's implicit interface satisfaction (no `implements` keyword) is a **permanent** gap: this
   extractor never emits `RefImplements` for Go — detecting it needs real type-checking, not
   tree-sitter queries.
 - An import's local identifier, when no alias is written, is approximated as the import path's
   last path segment — wrong only for the rare package whose declared name differs from its
-  directory name.
-- Dot imports (`. "pkg"`) are not resolved — a rare, discouraged Go idiom.
+  directory name. **Deliberately left open**: a correct fix needs the target package's own
+  ACTUAL declared name, which is only knowable for an internal (same-module) import by reading
+  one of that directory's already-indexed files — a cross-file, index-level correction this
+  extractor's per-file `Extract` has no access to. Attempted only as a bounded, additive fix
+  during this pass; deferred rather than risk a bigger resolver-pipeline change for a case this
+  project's own self-hosting measurement has never actually hit.
+- Dot imports (`. "pkg"`) are not resolved — a rare, discouraged Go idiom. Left as a **permanent**
+  gap: `go vet`/linting conventions actively discourage this form in real code, so the ROI of
+  supporting it is low relative to the resolver-pipeline surface it would touch.
 
 ### Extraction and resolution (`internal/parser/csharp`) — ADR-0023
 Measured at 0.0% bug_rate on a real repo (eShopOnWeb, 254 files, 777 entities, 337 resolved

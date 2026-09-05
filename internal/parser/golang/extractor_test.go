@@ -200,6 +200,44 @@ func walkTree(fn func(path string) error) error {
 	}
 }
 
+// TestExtract_QualifiedFieldType_ProducesCompoundReceiverType closes a
+// documented gap: a struct field typed via `pkg.Type` (cross-package) must
+// carry a receiver-type signal, same as a bare same-package field type
+// already does — stored as "pkgAlias.TypeName" so the resolver's
+// FollowImportToMethods (lang_go.go) can split it and look the type up
+// through the import table.
+func TestExtract_QualifiedFieldType_ProducesCompoundReceiverType(t *testing.T) {
+	src := `package svc
+
+import "myrepo/internal/repo"
+
+type Service struct {
+	repo *repo.UserRepo
+}
+
+func (s *Service) DoThing() {
+	s.repo.FindByEmail("a@b.com")
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "test-repo", "internal/svc/service.go", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var found bool
+	for _, r := range facts.Refs {
+		if r.Kind == model.RefCall && r.Target.Member == "FindByEmail" {
+			found = true
+			if r.Target.ReceiverType != "repo.UserRepo" {
+				t.Errorf("got ReceiverType %q, want %q", r.Target.ReceiverType, "repo.UserRepo")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a FindByEmail call ref, got: %+v", facts.Refs)
+	}
+}
+
 func TestExtract_NonTestFileTestPrefixedFuncStaysFunction(t *testing.T) {
 	// A function named TestFoo in a regular (non-_test.go) file is NOT
 	// reclassified — go test itself would never run it either.
