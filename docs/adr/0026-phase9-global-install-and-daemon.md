@@ -1,9 +1,11 @@
 # ADR-0026: Phase 9 — global install and system-level daemon
 
-- **Status**: Accepted and released. `v0.1.0` was tagged and published later the same day, at a
-  separate explicit follow-up request ("Haz lo de las versiones del release") — see "Update:
-  v0.1.0 released" at the end of this ADR. A live `ctx service install` verification on a real
-  machine remains the one item still needing the user's own go-ahead.
+- **Status**: Accepted, released, and live-verified. `v0.1.0` was tagged and published later the
+  same day, at a separate explicit follow-up request ("Haz lo de las versiones del release") —
+  see "Update: v0.1.0 released." `ctx service install` was then run for real, at a further
+  explicit go-ahead, and `ctxd` is now a real running `launchd` agent on the maintainer's own
+  machine, watching real registered projects. Every item under "what still needs a human
+  decision" is now closed.
 - **Date**: 2026-09-05
 - **Related**: `docs/requirements/phase9-global-install-and-daemon.md` (the requirements this
   implements, reviewed and refined earlier the same day), ADR-0016 (project registry), ADR-0019
@@ -99,13 +101,13 @@ activating it requires.
 
 - ~~Cutting an actual `vX.Y.Z` release~~ — **done, same day**: `v0.1.0` tagged and released at a
   separate, explicit follow-up request. See "Update: v0.1.0 released" below.
-- **Actually running `ctx service install` on a real machine** registers a real, persistent
-  background service (a `launchd` agent that survives reboots, or a `systemd --user` unit) — every
-  code path is unit-tested with a fake command runner (Decision 2), but a true end-to-end live
-  verification (does `launchctl load` actually succeed on this real machine, does `ctxd` actually
-  come up and answer `/api/projects`) needs the user's explicit go-ahead before this ADR's author
-  runs it for real, per this project's own standing rule about hard-to-reverse, outward-facing
-  actions.
+- ~~Actually running `ctx service install` on a real machine~~ — **done**, at a further explicit
+  go-ahead ("Hazlo, así hacemos una prueba real y se mapean los proyectos en tiempo real"): `ctxd`
+  is a real, running `launchd` agent on the maintainer's own machine, watching five real
+  registered projects (this repo, plus four fixtures), left running to be monitored (~0% idle CPU,
+  ~75MB RSS observed). One of the five (`similarity-eval`) was registered WHILE the service was
+  already running and picked up live via ADR-0026's own reconciliation — the exact daemon-side
+  gap this ADR set out to close, confirmed on a real machine, not just under a temp `$HOME` in CI.
 - **Creating a `homebrew-tap` repository** — a new, separate, public GitHub repo — not created
   without being asked to.
 

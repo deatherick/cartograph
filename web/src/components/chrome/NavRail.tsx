@@ -1,12 +1,12 @@
 // Left nav rail — structure/interaction pattern (56px collapsed, hover to
 // 220px, icon+label rows, theme toggle pinned at the foot) adapted from
 // Grafel's webui-v2 NavRail (MIT License — see NOTICE.md); the screen
-// list itself is entirely Cartograph's own (Overview/Explore/Graph/
-// Impact — Grafel's Topology/Paths/Links/GraphQL/Infrastructure/Security/
-// Taint/Dependency-Injection/Error-flow/Quality/Operations screens have no
-// Cartograph equivalent yet and were not carried over).
+// list itself is entirely Cartograph's own (Overview/Graph/Impact/
+// Duplicates — Grafel's Topology/Paths/Links/GraphQL/Infrastructure/
+// Security/Taint/Dependency-Injection/Error-flow/Quality/Operations
+// screens have no Cartograph equivalent yet and were not carried over).
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Waypoints, Target, Sun, Moon } from 'lucide-react'
+import { LayoutDashboard, Waypoints, Target, Copy, Sun, Moon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/lib/theme'
 
@@ -14,6 +14,7 @@ const SCREENS = [
   { to: '/', label: 'Overview', Icon: LayoutDashboard, end: true },
   { to: '/graph', label: 'Graph', Icon: Waypoints },
   { to: '/impact', label: 'Git diff impact', Icon: Target },
+  { to: '/duplicates', label: 'Duplicates', Icon: Copy },
 ]
 
 function rowClass(active: boolean) {
