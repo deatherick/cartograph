@@ -19,11 +19,16 @@
 //     primarily a function-body question; comparing two Interfaces or
 //     Classes structurally as "duplicates" is a different, unattempted
 //     problem.
-//   - Structural similarity does not normalize renamed identifiers to a
-//     common placeholder (a real code-clone-detection technique) — see
-//     tokenize.go's doc. The "renamed" category in the master plan's own
-//     evaluation taxonomy (same structure, different variable names)
-//     scores lower than it ideally would as a result.
+//   - Structural similarity DOES normalize renamed identifiers now
+//     (tokenize.go's normalizeIdentifiers, ADR-0025's follow-up to
+//     ADR-0021's originally-scoped-out gap) — every identifier-looking
+//     token that isn't a shared keyword (structuralKeywords) is replaced
+//     with a placeholder numbered by first appearance within one
+//     entity's own token stream, the standard "blind renaming" clone-
+//     detection technique. Still not real declaration/reference-aware
+//     (a heuristic tokenizer, not a parser, can't tell a declared name
+//     from a referenced one) and still not scoped to per-language
+//     keyword sets (one shared list across TS/Go/C#/Python).
 //   - No L2 bounded AST tree-edit-distance — the master plan's funnel
 //     diagram names this as a distinct rung above MinHash+LSH; token-
 //     shingle Jaccard stands in as the structural signal instead. Real
@@ -50,8 +55,13 @@ const (
 	// forwarding wrappers) whose near-identical token streams would
 	// otherwise flood results with true-but-uninteresting matches — a
 	// common practical filter in real clone-detection tools, not specific
-	// to this implementation.
-	minBodyTokens = 12
+	// to this implementation. Raised from 12 to 15 (ADR-0025's identifier-
+	// normalization follow-up to ADR-0021): two 12-token trivial functions
+	// differing only by name and one type-annotation identifier (this
+	// package's own eval fixture's getX/getY) collapse to fully IDENTICAL
+	// normalized token streams once identifiers are normalized, which 12
+	// was too low a floor to filter — measured, not assumed, see ADR-0025.
+	minBodyTokens = 15
 
 	// candidateJaccardFloor is the MinHash-estimated Jaccard a candidate
 	// pair must clear before its (more meaningful, still cheap) Overall
@@ -131,7 +141,7 @@ func Find(snap *store.Snapshot, root string, minOverall float64) ([]Pair, error)
 		if len(tokens) < minBodyTokens {
 			continue
 		}
-		shingles := shingleHashes(tokens)
+		shingles := shingleHashes(normalizeIdentifiers(tokens))
 		fps = append(fps, fingerprint{
 			entity:     e,
 			sig:        minHashSignature(shingles),
