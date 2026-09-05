@@ -17,7 +17,7 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 3a — Go extractor + self-hosting | ✅ Done (ADR-0010) — 0.1% bug_rate indexing this project's own real Go source |
 | 3a′ — Plug-and-play language architecture, init wizard | ✅ Done (ADR-0011) — `LanguagePolicy` interface, `.cartograph.json`, `ctx init`/`ctx languages` |
 | 3b — C# extractor | ✅ Done (ADR-0023) — 0.0% bug_rate on a real repo (eShopOnWeb, 254 files) |
-| 3c — Python extractor | ⬜ Post-MVP (now a drop-in addition per ADR-0011, not a core rewrite) |
+| 3c — Python extractor | ✅ Done (ADR-0024) — 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files); real-repo ctxbench passes the exit criterion (88.9% reduction, 0.86 recall) |
 | 3d — Daemon watcher (V0: full reindex on change, not per-file incremental) | ✅ Done (ADR-0012) — `internal/watch` + real `cmd/ctxd`, verified end-to-end |
 | 6 — Web UI: integrated Overview (table+detail+graph+impact tabs), navigable graph, git-diff impact | ✅ Done (ADR-0013/0015) — served by `ctxd --web`, React+Vite (reversed from V0's no-build choice) |
 | 4 — Impact analysis (`ctx impact`, git-diff-driven blast radius) | ✅ Done (ADR-0014) — unblocks the Web UI's Impact view |
@@ -181,6 +181,30 @@ edges) — these are the documented gaps behind that number, not blockers:
   zero-recall task are correctly extracted and findable), the same category ADR-0022 already
   documented and left open for TypeScript, not chased again here.
 
+### Extraction and resolution (`internal/parser/python`) — ADR-0024
+Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files, 112 entities,
+21 resolved edges) — these are the documented gaps behind that number, not blockers:
+- No re-export awareness — a name only reachable through an `__init__.py` barrel
+  (`from mypackage import Name` when `Name` is actually defined in a submodule and merely
+  re-exported) does not resolve. Real, not observed in the validation target.
+- No three-level unaliased namespace chain (`import x.y.z` then `x.y.z.member()`) — Python binds
+  only the top segment; the chain past that isn't chased, the same bounded scope C#'s
+  `Guard.Against.Null` gap already accepts.
+- `self.field = some_parameter` (assigning a constructor's own parameter directly, arguably more
+  idiomatic than re-instantiating in `__init__`) gives no receiver-type signal — only
+  `self.field = SomeClass(...)` does. A present PEP 484 type hint on the parameter is captured but
+  not yet cross-referenced back into this path.
+- Decorators that rename or replace their target at runtime (`functools.wraps`-based wrappers,
+  Django's `@receiver`) are undetectable via syntax alone — a permanent gap in the same category
+  as Go's implicit interface satisfaction.
+- A `src`-layout repo (on-disk root ≠ importable package root) won't resolve absolute imports —
+  never guessed at with a "src/" prefix fallback, the same "exact match only" discipline ADR-0023
+  established for C#.
+- Real-repo Context Compiler recall (0.86, `fixtures/tasks/django-realworld.json`) **passes** the
+  0.85 exit criterion on the first real-repo measurement — an outlier compared to every prior
+  language's own first pass (TS/C# both needed extraction fixes or still fell short); attributed to
+  this repo's own short, vocabulary-rich call chains, not a Context Compiler change (untouched).
+
 ### Context Compiler (`internal/compile`)
 - Seeding is term-overlap (with camelCase splitting) **plus IDF term weighting** (a rare, specific
   term counts for more than a generic one — `termWeights`), not full BM25/FTS5 — explicitly
@@ -261,8 +285,6 @@ edges) — these are the documented gaps behind that number, not blockers:
 
 ## Explicitly deferred (post-MVP, tracked not forgotten)
 
-- **Python extraction** (Phase 3c) — Go (ADR-0010) and C# (ADR-0023) shipped first; Python remains
-  post-MVP.
 - **Daemon + file watcher remaining hardening** (Phase 3d) — true per-file incremental indexing is
   now done (ADR-0020); FSEvents on macOS (still fsnotify's kqueue), the watcher exclusion layers
   beyond the static skip list/`.gitignore` (adaptive churn quarantine), and a `.git/HEAD` branch-
@@ -427,9 +449,22 @@ This closes every item in the weighted "easy win" batch (Paths, Quality, Operati
     ctxbench 78.3% reduction / 0.85 recall — passes) plus `fixtures/tasks/eshoponweb.json` (real
     repo, ctxbench 46.4% reduction / 0.65 recall — below target, reported honestly, same open
     seeding/ranking gap category as ADR-0022's TypeScript story, not a new one).
-20. Next after that, per the deferred list above: the Python extractor (Phase 3c) — same
-    "find real gaps against real code" methodology this ADR and the schema-const/route-handler
-    fixes both used, not synthetic fixtures alone — the global-install/system-service work
-    (Phase 9), or deepening the Similarity Engine (AST tree-edit distance, identifier
-    normalization, a larger labeled eval set, Web UI/Context Compiler integration) — prioritized by
-    real usage feedback.
+20. ~~Python extractor (Phase 3c)~~ — done, ADR-0024: `internal/parser/python` + `lang_python.go`,
+    the third and final language in the original Go/C#/Python plan, added the same way with zero
+    core changes beyond the architecture test's grep list. Validated against a real repo the user
+    picked (`gothinkster/django-realworld-example-app`, chosen specifically to compare methodology
+    against the TypeScript RealWorld clone already used for Phase 1/2): 0.0% bug_rate, 21 resolved
+    edges. File-scoped (not directory-scoped like Go/C#) because Python genuinely has no implicit
+    same-package visibility, unlike either — a real language difference, not a narrower
+    approximation. `self`'s type resolves deterministically (it names its own enclosing class, a
+    structural fact) without repeating C#'s rejected capitalization heuristic — a real, one-line
+    text check, not a guess, applying the user's ADR-0023 guardrail as this project's standing
+    default rather than re-litigating it. `fixtures/python-basic` (synthetic, ctxbench 77.2%
+    reduction / 1.00 recall) and `fixtures/tasks/django-realworld.json` (real repo, ctxbench 88.9%
+    reduction / 0.86 recall — the first language whose real-repo measurement clears the exit
+    criterion on its own first pass, reported as a property of this specific repo's short,
+    vocabulary-rich call chains, not a Context Compiler change).
+21. Next after that, per the deferred list above: the global-install/system-service work (Phase 9),
+    or deepening the Similarity Engine (AST tree-edit distance, identifier normalization, a larger
+    labeled eval set, Web UI/Context Compiler integration) — prioritized by real usage feedback.
+    This closes the three-language plan (Go, C#, Python) set at the start of Phase 3.

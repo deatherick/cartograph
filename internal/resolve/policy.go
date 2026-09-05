@@ -126,3 +126,45 @@ var csKnownNamespaces = map[string]bool{
 	"Newtonsoft": true, "Xunit": true, "Moq": true, "FluentAssertions": true,
 	"NSubstitute": true, "Serilog": true, "Blazored": true,
 }
+
+// pyBuiltins is Python's built-in namespace (the subset that can
+// plausibly appear as a bare CALL target — this project's own extractor
+// only emits a ref for a name used as `identifier(...)`, so exceptions/
+// constants like `None`/`True` that are never called this way are
+// omitted). A bare reference to one of these is never a repo entity and
+// must not be flagged as a potential bug, mirroring goBuiltins/
+// knownGlobals/csBuiltins above.
+var pyBuiltins = map[string]bool{
+	"print": true, "len": true, "str": true, "int": true, "float": true,
+	"bool": true, "list": true, "dict": true, "set": true, "tuple": true,
+	"frozenset": true, "bytes": true, "bytearray": true,
+	"isinstance": true, "issubclass": true, "super": true, "range": true,
+	"enumerate": true, "zip": true, "map": true, "filter": true, "sorted": true,
+	"reversed": true, "open": true, "input": true, "iter": true, "next": true,
+	"getattr": true, "setattr": true, "hasattr": true, "delattr": true,
+	"vars": true, "dir": true, "id": true, "hash": true, "repr": true,
+	"format": true, "type": true, "callable": true, "property": true,
+	"staticmethod": true, "classmethod": true, "abs": true, "min": true,
+	"max": true, "sum": true, "round": true, "divmod": true, "pow": true,
+	"all": true, "any": true, "exec": true, "eval": true, "compile": true,
+	"globals": true, "locals": true, "__import__": true,
+	"Exception": true, "ValueError": true, "TypeError": true, "KeyError": true,
+	"IndexError": true, "AttributeError": true, "RuntimeError": true,
+	"StopIteration": true, "NotImplementedError": true, "ImportError": true,
+	"FileNotFoundError": true, "OSError": true, "IOError": true, "ZeroDivisionError": true,
+}
+
+// pyKnownPackages is a starter allowlist of well-known top-level Python
+// package names (stdlib and third-party alike — Python's own packaging
+// convention has no syntactic tell distinguishing the two, unlike Go's
+// dot-in-first-segment rule, see lang_python.go's externalDisposition),
+// mirroring goKnownPackages/csKnownNamespaces above. Starter list only —
+// grows as real repos surface more.
+var pyKnownPackages = map[string]bool{
+	"os": true, "sys": true, "re": true, "json": true, "random": true,
+	"string": true, "datetime": true, "collections": true, "itertools": true,
+	"functools": true, "typing": true, "abc": true, "unittest": true,
+	"logging": true, "math": true, "time": true, "uuid": true, "copy": true,
+	"jwt": true, "django": true, "rest_framework": true, "pytest": true,
+	"requests": true, "celery": true, "boto3": true, "sqlalchemy": true,
+}

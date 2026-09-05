@@ -1,4 +1,4 @@
-.PHONY: build web test lint bench bench-real bench-real-csharp clean
+.PHONY: build web test lint bench bench-real bench-real-csharp bench-real-python clean
 
 # web builds the React frontend (web/) and copies its output into
 # internal/httpserver/web/ — the directory internal/httpserver.go embeds
@@ -46,6 +46,16 @@ bench-real-csharp: build
 		https://github.com/dotnet-architecture/eShopOnWeb \
 		~/code/_ref/eShopOnWeb
 	./bin/ctxbench --baseline --capsule --budget 2500 --fixtures-root ~/code/_ref --tasks fixtures/tasks/eshoponweb.json
+
+# bench-real-python is bench-real's Python counterpart (ADR-0024, Phase 3c):
+# same real-repo-not-vendored methodology, chosen specifically to compare
+# against realworld-ts.json (same RealWorld/Conduit domain, different
+# language and framework).
+bench-real-python: build
+	@[ -d ~/code/_ref/django-realworld-example-app ] || git clone --depth 1 \
+		https://github.com/gothinkster/django-realworld-example-app \
+		~/code/_ref/django-realworld-example-app
+	./bin/ctxbench --baseline --capsule --budget 2500 --fixtures-root ~/code/_ref --tasks fixtures/tasks/django-realworld.json
 
 clean:
 	rm -rf bin/
