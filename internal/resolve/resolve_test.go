@@ -602,6 +602,49 @@ func TestResolve_Go_ReceiverTypeThroughStructField(t *testing.T) {
 	}
 }
 
+// TestResolve_Go_ReceiverTypeThroughCrossFileStructField closes the
+// "structFieldTypes only sees whichever file's own declarations it was
+// built from" half of the documented "No partial-class support" gap
+// (shared with C#): Service.dep's field type is declared in a DIFFERENT
+// file of the SAME package directory than the call site — same-file
+// extraction-time lookup finds nothing (ReceiverType arrives empty), but
+// the resolver's cross-file fallback (lookupFieldTypeCrossFile) must
+// still find it via SameScopeFiles.
+func TestResolve_Go_ReceiverTypeThroughCrossFileStructField(t *testing.T) {
+	idx := goIndex("")
+
+	doThingEnt := goEntity(model.KindMethod, "internal/svc#Service.DoThing", "DoThing")
+	callerFacts := &model.FileFacts{
+		Lang: model.LangGo, File: "internal/svc/service.go",
+		Entities: []model.Entity{doThingEnt},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Src: doThingEnt.ID, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "dep", Member: "Greeting"}},
+		},
+	}
+	// The field declaration lives in a SEPARATE file — no Entity here,
+	// just the field-type fact, mirroring how a struct's field could be
+	// declared in one file of a package while a method using it lives in
+	// another.
+	fieldFacts := &model.FileFacts{
+		Lang: model.LangGo, File: "internal/svc/types.go",
+		FieldTypes: []model.TypedField{{Owner: "Service", Field: "dep", Type: "Dep"}},
+	}
+	depEnt := goEntity(model.KindMethod, "internal/svc#Dep.Greeting", "Greeting")
+	depFacts := &model.FileFacts{Lang: model.LangGo, File: "internal/svc/dep.go", Entities: []model.Entity{depEnt}}
+
+	idx.AddFile(callerFacts)
+	idx.AddFile(fieldFacts)
+	idx.AddFile(depFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected the cross-file field-type fallback to resolve this call, got %+v", got)
+	}
+	if got[0].Edge.Dst != depEnt.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, depEnt.ID)
+	}
+}
+
 // TestResolve_Go_ReceiverTypeThroughCrossPackageStructField closes a
 // documented gap: a struct field typed via `pkg.Type` (cross-package) —
 // the extractor stores this as the compound ReceiverType "repo.UserRepo"
@@ -973,6 +1016,47 @@ func TestResolve_CSharp_SameClassMethod_TakesPrecedenceOverExtensionMethod(t *te
 	}
 	if got[0].Edge.Dst != instanceEnt.ID {
 		t.Fatalf("expected the instance method to take precedence, got %s want %s", got[0].Edge.Dst, instanceEnt.ID)
+	}
+}
+
+// TestResolve_CSharp_PartialClass_FieldDeclaredInOtherFile closes the
+// "fieldTypesByOwner only sees whichever file's own declarations they
+// were built from" half of the documented "No partial-class support"
+// gap: OrderService is `partial`, its `_repository` field is declared in
+// a DIFFERENT file than the method calling through it — same-file
+// extraction-time lookup finds nothing (ReceiverType arrives empty), but
+// the resolver's cross-file fallback must still find it via
+// SameScopeFiles (same directory).
+func TestResolve_CSharp_PartialClass_FieldDeclaredInOtherFile(t *testing.T) {
+	idx := csIndex(nil)
+
+	methodEnt := csEntity("src/Orders#OrderService.Process", "Process")
+	callerFacts := &model.FileFacts{
+		Lang: model.LangCSharp, File: "src/Orders/OrderService.cs",
+		Entities: []model.Entity{methodEnt},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Src: methodEnt.ID, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "_repository", Member: "FindByEmail"}},
+		},
+	}
+	// The field is declared in OrderService.Fields.cs — a different
+	// partial-class file for the SAME class, same directory.
+	fieldFacts := &model.FileFacts{
+		Lang: model.LangCSharp, File: "src/Orders/OrderService.Fields.cs",
+		FieldTypes: []model.TypedField{{Owner: "OrderService", Field: "_repository", Type: "IOrderRepository"}},
+	}
+	repoEnt := csEntity("src/Orders#IOrderRepository.FindByEmail", "FindByEmail")
+	repoFacts := &model.FileFacts{Lang: model.LangCSharp, File: "src/Orders/IOrderRepository.cs", Entities: []model.Entity{repoEnt}}
+
+	idx.AddFile(callerFacts)
+	idx.AddFile(fieldFacts)
+	idx.AddFile(repoFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected the cross-file field-type fallback to resolve this partial-class call, got %+v", got)
+	}
+	if got[0].Edge.Dst != repoEnt.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, repoEnt.ID)
 	}
 }
 

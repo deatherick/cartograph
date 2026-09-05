@@ -63,6 +63,17 @@ type fileEntry struct {
 	// facts.ExtensionMethods), consulted only by lang_csharp.go's
 	// FollowImportToMethods.
 	extensionMethodsByType map[string]map[string]model.EntityID
+	// fieldTypesByOwner indexes a class/struct's OWN field types
+	// (model.TypedField's doc) as declared in THIS file only — the
+	// resolver's cross-file receiver-type fallback (resolveQualified)
+	// merges this across every file in scope (same directory + a
+	// directory-scoped LanguagePolicy's own SameScopeFiles) so a
+	// directory/namespace-scoped type split across multiple files (a Go
+	// package, a C# partial class) resolves a field's type regardless of
+	// which file declared it. Populated only by Go/C#'s extractors (the
+	// only two with this gap — TypeScript/Python's one-class-one-file
+	// model never needs it); every other language's map here stays empty.
+	fieldTypesByOwner map[string]map[string]string
 }
 
 // Index accumulates every file's facts before resolution starts — the
@@ -103,6 +114,15 @@ type Index struct {
 	// correct the edge to EdgeImplements if it turns out to be an
 	// interface — deterministic, based on resolved data, never a guess.
 	entityKind map[model.EntityID]model.Kind
+	// entityOwner maps a Method-kind entity's ID to its owning
+	// class/struct name — parsed from Entity.Qualified the exact same way
+	// fe.methodsByOwner already is (AddFile, below), just keyed by ID
+	// instead of by owner name. This is what lets the cross-file
+	// receiver-type fallback (resolveQualified) discover "what type is
+	// `this`/the receiver, for whichever method made this call" without
+	// re-deriving it per-language: Ref.Src is already that method's
+	// EntityID, so idx.entityOwner[ref.Src] gives its owner directly.
+	entityOwner map[model.EntityID]string
 }
 
 // NewIndex creates an empty resolver index for repo, with no languages
@@ -114,12 +134,13 @@ type Index struct {
 // lighter run, not a broken one.
 func NewIndex(repo string) *Index {
 	return &Index{
-		repo:       repo,
-		files:      map[string]*fileEntry{},
-		byBareName: map[string][]model.EntityID{},
-		filesByDir: map[string][]string{},
-		policies:   map[model.Lang]LanguagePolicy{},
-		entityKind: map[model.EntityID]model.Kind{},
+		repo:        repo,
+		files:       map[string]*fileEntry{},
+		byBareName:  map[string][]model.EntityID{},
+		filesByDir:  map[string][]string{},
+		policies:    map[model.Lang]LanguagePolicy{},
+		entityKind:  map[model.EntityID]model.Kind{},
+		entityOwner: map[model.EntityID]string{},
 	}
 }
 
@@ -155,12 +176,19 @@ func (idx *Index) AddFile(facts *model.FileFacts) {
 		reExports:              facts.ReExports,
 		methodsByOwner:         map[string]map[string]model.EntityID{},
 		extensionMethodsByType: map[string]map[string]model.EntityID{},
+		fieldTypesByOwner:      map[string]map[string]string{},
 	}
 	for _, em := range facts.ExtensionMethods {
 		if fe.extensionMethodsByType[em.ExtendedType] == nil {
 			fe.extensionMethodsByType[em.ExtendedType] = map[string]model.EntityID{}
 		}
 		fe.extensionMethodsByType[em.ExtendedType][em.Name] = em.EntityID
+	}
+	for _, tf := range facts.FieldTypes {
+		if fe.fieldTypesByOwner[tf.Owner] == nil {
+			fe.fieldTypesByOwner[tf.Owner] = map[string]string{}
+		}
+		fe.fieldTypesByOwner[tf.Owner][tf.Field] = tf.Type
 	}
 	idx.filesByDir[dir] = append(idx.filesByDir[dir], facts.File)
 	for _, e := range facts.Entities {
@@ -205,6 +233,7 @@ func (idx *Index) AddFile(facts *model.FileFacts) {
 			fe.methodsByOwner[owner] = map[string]model.EntityID{}
 		}
 		fe.methodsByOwner[owner][e.Name] = e.ID
+		idx.entityOwner[e.ID] = owner
 	}
 	idx.files[facts.File] = fe
 }
@@ -238,6 +267,7 @@ func (idx *Index) RemoveFile(file string) {
 	}
 	for _, e := range fe.entities {
 		delete(idx.entityKind, e.ID)
+		delete(idx.entityOwner, e.ID)
 		if e.Kind == model.KindTest {
 			continue // never indexed into byBareName in the first place — see AddFile's doc
 		}
@@ -456,6 +486,24 @@ func (idx *Index) resolveQualified(file string, fe *fileEntry, ref model.Ref, ki
 			}
 		}
 	}
+	if receiverType == "" && fe != nil && ref.Src != "" {
+		// The extractor's own same-file field-type lookup (Go's
+		// structFieldTypes, C#'s fieldTypesByOwner) already ran at
+		// extraction time and found nothing for this ref — but the field
+		// might be declared in a DIFFERENT file of the same
+		// directory/namespace-scoped type (a Go package, a C# partial
+		// class; edge-case-backlog.md, "no partial-class support").
+		// ref.Src is already the calling method's own EntityID, so its
+		// owner (idx.entityOwner) is exactly the class/struct whose field
+		// ref.Target.Name would be — the same value the extractor's own
+		// same-file lookup already keys on, just looked up across every
+		// file in scope instead of one.
+		if owner, ok := idx.entityOwner[ref.Src]; ok {
+			if t, ok := idx.lookupFieldTypeCrossFile(file, fe, owner, ref.Target.Name); ok {
+				receiverType = t
+			}
+		}
+	}
 	if receiverType != "" {
 		if id, ok := idx.resolveByReceiverType(file, fe, receiverType, ref.Target.Member); ok {
 			return resolvedEdge(ref.Src, kind, id, 0.85, model.ProvenanceInferred,
@@ -525,6 +573,34 @@ func (idx *Index) resolveByReceiverType(file string, fe *fileEntry, receiverType
 		if methods, ok := policy.FollowImportToMethods(idx, file, fe, receiverType); ok {
 			if id, ok := methods[member]; ok {
 				return id, true
+			}
+		}
+	}
+	return "", false
+}
+
+// lookupFieldTypeCrossFile mirrors resolveByReceiverType's own
+// same-file-then-SameScopeFiles shape, for owner's field-type map instead
+// of its methods — see fieldTypesByOwner's doc on fileEntry for why this
+// exists (a directory/namespace-scoped type split across multiple files).
+// A no-op (ok=false) for any language whose extractor never populates
+// model.FileFacts.FieldTypes (TypeScript, Python) — fe.fieldTypesByOwner
+// is simply always empty there, never guessed at.
+func (idx *Index) lookupFieldTypeCrossFile(file string, fe *fileEntry, owner, field string) (string, bool) {
+	if fe == nil {
+		return "", false
+	}
+	if t, ok := fe.fieldTypesByOwner[owner][field]; ok {
+		return t, true
+	}
+	if policy := idx.policyFor(fe); policy != nil {
+		for _, sibling := range policy.SameScopeFiles(idx, file) {
+			sf := idx.files[sibling]
+			if sf == nil {
+				continue
+			}
+			if t, ok := sf.fieldTypesByOwner[owner][field]; ok {
+				return t, true
 			}
 		}
 	}
