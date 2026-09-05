@@ -96,15 +96,17 @@ rediscover this later" list.
   entities at all — every route handler is an anonymous callback with no declared name, a query
   pattern this extractor had no case for. Now extracted as real `KindFunction` entities, name
   synthesized from HTTP verb+path plus every `req.<x>.<field>` the handler reads. One of the two
-  tasks (R10) now passes; real-repo average recall@gold moved 0.50 -> 0.62. The other (R07) is
-  still open — its gold entity now exists and scores correctly, but doesn't reach the ranker's
-  default top-5 seeds; two ranker-side fixes were built, measured, and explicitly REJECTED because
-  each regressed the synthetic fixture's recall below its own exit criterion (see ADR-0022 and
-  `docs/benchmarks/2026-08-29-route-handler-extraction.md` for the full account — a real ranking
-  function, not another patch to substring matching, is what R07 actually needs).
-- **Real-repo Context Compiler recall gap (0.62 vs 0.85 target) remains open** — see above; this
-  is now understood as a seeding/ranking limitation (substring matching on common words), not an
-  extraction gap.
+  tasks (R10) now passes; real-repo average recall@gold moved 0.50 -> 0.62. The other (R07) was
+  still open at the time — its gold entity existed and scored correctly, but didn't reach the
+  ranker's default top-5 seeds; two ranker-side fixes were built, measured, and explicitly
+  REJECTED because each regressed the synthetic fixture's recall below its own exit criterion (see
+  ADR-0022 and `docs/benchmarks/2026-08-29-route-handler-extraction.md` for the full account).
+- ~~Real-repo Context Compiler recall gap (0.62 vs 0.85 target) remains open~~ **closed, ADR-0028**:
+  the actual mechanism (raw substring matching letting a term match across a word boundary, e.g.
+  "articles" matching "ArticleSchema" purely by character coincidence) was fixed with real
+  word-boundary tokenization plus light stemming — R07 now passes (1.00), `realworld-ts`'s average
+  moved 0.67 -> 0.78. See ADR-0028 for the full account, including why the two originally-rejected
+  patches (stopword list, length guard) never addressed the real cause.
 - `Entity.Signature` and `Entity.DocSummary` are never populated — the source ladder's
   signature/skeleton rungs read the first source line as a stand-in (`internal/compile`'s
   package doc). A real reconstructed signature string is better long-term.
@@ -250,31 +252,27 @@ edges) — these are the documented gaps behind that number, not blockers:
   all (verified by a dedicated test). A file this index cannot attribute to any known project
   (an edge case) falls back to the old permissive behavior rather than risk denying a legitimate
   same-project resolution it simply couldn't verify.
-- **Real-repo Context Compiler recall (`fixtures/tasks/eshoponweb.json`) is 0.40, not the 0.65 vs
-  0.85 target ADR-0023 originally reported** — corrected after investigating a discrepancy the
-  known-issues sweep surfaced. Root-caused via a `git worktree` bisect across every commit between
-  ADR-0023's original measurement and today, holding the eShopOnWeb clone fixed: the number moved
-  from 0.65 to 0.40 at the exact commit that added xUnit/NUnit/MSTest attribute-based test
-  detection (closing a DIFFERENT, real gap — see this section's own entry above). Before that fix,
-  a `[Fact]`-attributed test method was an ordinary `KindMethod` entity, eligible to SEED a
-  capsule like any other method — and a test method's own name (`BasketAddItem.
-  IncrementsQuantityOfItemIfPresent`) frequently restates a task's own vocabulary almost verbatim,
-  making it a spuriously strong term-overlap match. Once seeded, that test method's own body
-  (typically constructing the exact domain objects it tests, e.g. `new Basket()`/`new
-  BasketItem()`) gave graph expansion an accidental "bridge" into the real gold classes — a path
-  that has nothing to do with genuinely understanding the production task, just an artifact of
-  test code incidentally referencing the same types. Reclassifying test methods to `KindTest`
-  (correctly excluded from seeding — the same "test labels are not useful seeds for a code task"
-  rule Go's own extractor already documents) removed that accidental bridge, and the TRUE
-  underlying recall — reachability from production-code seeds alone — turns out to be
-  considerably worse than the number this project had been reporting. This is not a new
-  regression to fix; it is the same seeding/ranking limitation ADR-0022 already documented and
-  left open for TypeScript (a real ranking function is needed, not another patch — two prior
-  attempts were built, measured, and explicitly REJECTED for regressing the synthetic fixture),
-  now measured honestly rather than inflated by a since-fixed extraction gap. Confirmed
-  unaffected by every other commit in between (Go/C# extension methods, `.csproj`
-  `ProjectReference` gating, Python re-exports, cross-file field types): the number was
-  IDENTICAL (0.40) at every commit from the test-detection fix onward.
+- **Real-repo Context Compiler recall (`fixtures/tasks/eshoponweb.json`) is 0.71**, up from a
+  corrected 0.40 (itself down from ADR-0023's originally-reported, since-shown-to-be-inflated
+  0.65 — see the investigation trail below). Two separate things happened here, in order:
+  1. A discrepancy investigation (root-caused via a `git worktree` bisect across every commit
+     between ADR-0023's original measurement and today, holding the eShopOnWeb clone fixed) found
+     the number had moved from 0.65 to 0.40 at the exact commit that added xUnit/NUnit/MSTest
+     attribute-based test detection. Before that fix, a `[Fact]`-attributed test method was an
+     ordinary `KindMethod` entity, eligible to seed a capsule — and a test method's own name
+     (`BasketAddItem.IncrementsQuantityOfItemIfPresent`) frequently restates a task's own
+     vocabulary almost verbatim, then its own body (typically constructing the exact domain
+     objects it tests) gave graph expansion an accidental bridge into the real gold classes, a
+     path unrelated to genuinely understanding the production task. Reclassifying test methods to
+     `KindTest` (correctly excluding them from seeding) removed that accidental bridge — revealing
+     the TRUE underlying recall was considerably worse than the number this project had been
+     reporting.
+  2. **That true number is now genuinely fixed, not just honestly reported** — ADR-0028 replaced
+     `internal/compile`'s raw substring-containment seeding with real word-boundary tokenization
+     plus light stemming, closing the actual mechanism behind BOTH the original inflation (test
+     methods' own names spuriously matching task vocabulary) and ADR-0022's separately-documented,
+     twice-rejected-patch R07 gap. eShopOnWeb's own recall moved 0.40 -> **0.71** as a direct,
+     measured result — see ADR-0028 for the full account and every fixture's before/after numbers.
 
 ### Extraction and resolution (`internal/parser/python`) — ADR-0024
 Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files, 112 entities,
@@ -305,19 +303,29 @@ Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files
 - A `src`-layout repo (on-disk root ≠ importable package root) won't resolve absolute imports —
   never guessed at with a "src/" prefix fallback, the same "exact match only" discipline ADR-0023
   established for C#.
-- Real-repo Context Compiler recall (0.86, `fixtures/tasks/django-realworld.json`) **passes** the
-  0.85 exit criterion on the first real-repo measurement — an outlier compared to every prior
-  language's own first pass (TS/C# both needed extraction fixes or still fell short); attributed to
-  this repo's own short, vocabulary-rich call chains, not a Context Compiler change (untouched).
+- Real-repo Context Compiler recall (`fixtures/tasks/django-realworld.json`) **passes** the 0.85
+  exit criterion since its first real-repo measurement (0.86) and now measures even higher
+  (**0.93**, after ADR-0028's word-boundary/stemming seeding rewrite) — an outlier compared to
+  every prior language's own first pass (TS/C# both needed extraction fixes or still fell short);
+  attributed to this repo's own short, vocabulary-rich call chains as much as the seeding fix
+  itself.
 
 ### Context Compiler (`internal/compile`)
-- Seeding is term-overlap (with camelCase splitting) **plus IDF term weighting** (a rare, specific
-  term counts for more than a generic one — `termWeights`), not full BM25/FTS5 — explicitly
-  deferred (ADR-0006's search-scope decision). Measured, not assumed: dampened to 40% strength
-  after full-strength IDF regressed the synthetic fixture below its exit criterion; the synthetic
-  fixture now passes at exactly 0.85 recall (the threshold itself), a thinner margin than before
-  this change — worth re-checking the next time seeding is touched. See
+- Seeding is term-overlap **plus IDF term weighting** (a rare, specific term counts for more than
+  a generic one — `termWeights`), not full BM25/FTS5 — explicitly deferred (ADR-0006's
+  search-scope decision). Measured, not assumed: dampened to 40% strength after full-strength IDF
+  regressed the synthetic fixture below its exit criterion — see
   `docs/benchmarks/2026-08-29-idf-seeding.md`.
+- ~~Term-overlap matching is raw substring containment on a name/symbol path's whole, camelCase-
+  split-only string~~ **closed, ADR-0028**: a term can now only match a REAL WORD of an entity's
+  name (word-boundary tokenization via `tokensFor`), with a light stemming tier (`stemMatch`)
+  catching morphological variants (plurals, gerunds) a task written in prose uses against code
+  written in its base form. Closes the real mechanism behind ADR-0022's twice-rejected-patch R07
+  gap (now 1.00) and the eShopOnWeb recall inflation ADR-0023's `## Update` surfaced (0.40 -> 0.71)
+  — see ADR-0028 for the full measured account across all six task sets. `defaultMaxSeeds` raised
+  5 -> 7 alongside this (the first value that restores every synthetic fixture's own exit
+  criterion is 6; 7 was kept for its measurably better real-repo recall at only a marginal,
+  still-passing token-reduction cost).
 - No centrality/PageRank term in scoring — `internal/graph`'s package doc already defers this;
   it would need pre-baked attributes at index time (a real, contained addition once useful).
 - No git-recency term — no git-metadata extraction exists yet (Phase 4 scope).
@@ -652,3 +660,27 @@ This closes every item in the weighted "easy win" batch (Paths, Quality, Operati
     language extractors), and clicking "Record" in the browser persisted a real decision to
     `~/.cartograph/cartograph-<hash>/duplicate-decisions.json` — confirmed by reading that file
     afterward, not assumed from the UI alone.
+25. ~~Known-issues sweep, then a real fix for the seeding/ranking gap~~ — done across several PRs,
+    at the user's explicit, repeated request ("cierra todo lo que puedas, uno por uno" then
+    later, specifically, "haz un arreglo real no un parche" for the seeding gap). Closed, in
+    order: `ctx context --file`/MCP root-name resolution; three TypeScript gaps (CJS renamed
+    destructure, tsconfig `extends`, test-callback `Src` attribution); a Go cross-package
+    receiver-type signal; C# xUnit/NUnit/MSTest test detection, extension methods, and
+    `.csproj` `ProjectReference` gating (transitive, after a direct-only version measurably
+    regressed eShopOnWeb); Python `__init__.py` re-export awareness; a shared cross-file
+    field-type resolution mechanism (`model.TypedField`, `internal/resolve`'s
+    `lookupFieldTypeCrossFile`) closing C#'s "no partial-class support" gap for real, verified
+    live (eShopOnWeb 337 -> 341 resolved edges). Investigating a discrepancy this sweep surfaced
+    (eShopOnWeb's own ctxbench recall) led to root-causing it via a `git worktree` bisect (0.65 ->
+    0.40, a since-fixed extraction bug had been inflating the number, not a new regression) and
+    then, at the user's explicit follow-up request, a REAL fix rather than accepting the honest-
+    but-worse number: ADR-0028 replaced `internal/compile`'s raw substring-containment seeding
+    with word-boundary tokenization plus light stemming, closing the actual mechanism behind
+    BOTH that inflation and ADR-0022's own twice-rejected-patch R07 gap. Measured across all six
+    `ctxbench` task sets: every synthetic fixture still passes its exit criterion (`ts-basic`
+    0.85 unchanged, `csharp-basic` 0.85->1.00, `python-basic` 1.00 unchanged), and every real-repo
+    fixture improved (`realworld-ts` 0.67->0.78 with R07 now 1.00, `eShopOnWeb` 0.40->0.71,
+    `django-realworld` 0.86->0.93) — see ADR-0028 for the full account, including the one
+    mid-implementation refinement a failing regression test caught (the whole, unsplit entity
+    name was briefly eligible for the stemming tier too, which would have reintroduced the exact
+    bug being fixed).

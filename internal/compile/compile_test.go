@@ -306,3 +306,71 @@ func TestMatchScore_RareTermMatchOutranksCommonTermMatch(t *testing.T) {
 		t.Fatalf("expected the specific term's match to outscore the generic term's match")
 	}
 }
+
+// TestMatchScore_DoesNotMatchAcrossWordBoundary is the real-fix
+// regression for the seeding gap ADR-0022 documented and left open: raw
+// substring containment let a task term match ACROSS a word boundary
+// purely by character coincidence, at FULL weight — "articles" (from a
+// task's own prose) matched "ArticleSchema" because its lowercased,
+// UNSPLIT form ("articleschema") literally contains "articles" as a run
+// of characters spanning "article"+"s"chema, an accident of English
+// pluralization bumping into an unrelated word's leading letter. Once
+// tokenized, "ArticleSchema" splits into "article"+"schema" — "articles"
+// no longer matches the WHOLE unsplit name at all (an entity genuinely
+// named "articles" would still match it, at full weight, exactly as
+// intended); it only reaches the entity through the real singular
+// "article" sub-word, at the weaker STEMMED tier, a real but reduced
+// signal rather than the inflated full-weight match the original bug
+// produced.
+func TestMatchScore_DoesNotMatchAcrossWordBoundary(t *testing.T) {
+	terms := tokenizeTask("dump the whole articles table")
+
+	viaWordBoundaryAccident := model.Entity{Name: "ArticleSchema", Qualified: "src/models#ArticleSchema"}
+	viaRealWholeNameMatch := model.Entity{Name: "articles", Qualified: "src/models#articles"}
+	idf := map[string]float64{"articles": 1, "dump": 1, "whole": 1, "table": 1}
+
+	if matchScore(viaWordBoundaryAccident, terms, idf) >= matchScore(viaRealWholeNameMatch, terms, idf) {
+		t.Fatalf("expected the word-boundary accident to score BELOW a real whole-name match: accident=%.2f real=%.2f",
+			matchScore(viaWordBoundaryAccident, terms, idf), matchScore(viaRealWholeNameMatch, terms, idf))
+	}
+
+	// The stemmed tier is real, not zero — "article" (the entity's own
+	// singular sub-word) is a genuine morphological relationship, not an
+	// accident, and must still contribute something.
+	if score := matchScore(viaWordBoundaryAccident, terms, idf); score == 0 {
+		t.Fatal("expected the real singular/plural sub-word relationship (\"articles\"~\"article\") to still score via stemMatch")
+	}
+}
+
+// TestMatchScore_StemMatchesMorphologicalVariants verifies the
+// gerund/plural stemming tier catches the exact real-world cases found
+// investigating this gap: a task written in prose ("placing", a gerund;
+// "percentages", a plural) matching code written in its base form
+// ("place", "percent").
+func TestMatchScore_StemMatchesMorphologicalVariants(t *testing.T) {
+	placeOrder := model.Entity{Name: "placeOrder", Qualified: "src/services#OrderService.placeOrder"}
+	terms := tokenizeTask("Add a test asserting that placing an order is rejected.")
+	if score := matchScore(placeOrder, terms, nil); score == 0 {
+		t.Fatal("expected \"placing\" to stem-match \"placeOrder\"'s own \"place\" token")
+	}
+
+	formatPercent := model.Entity{Name: "formatPercent", Qualified: "src/utils#formatPercent"}
+	terms2 := tokenizeTask("adding a new one for percentages")
+	if score := matchScore(formatPercent, terms2, nil); score == 0 {
+		t.Fatal("expected \"percentages\" to stem-match \"formatPercent\"'s own \"percent\" token")
+	}
+}
+
+// TestMatchScore_ExactMatchOutranksStemMatch verifies stemWeight keeps a
+// stemmed (morphological-variant) match strictly weaker than an exact
+// whole-word match — a real but weaker signal, never equally trusted.
+func TestMatchScore_ExactMatchOutranksStemMatch(t *testing.T) {
+	terms := []string{"orders"}
+	idf := map[string]float64{"orders": 1}
+	exact := model.Entity{Name: "ordersForUser", Qualified: "src/services#OrderService.ordersForUser"}
+	stemmed := model.Entity{Name: "orderTotalCents", Qualified: "src/models#orderTotalCents"}
+	if matchScore(exact, terms, idf) <= matchScore(stemmed, terms, idf) {
+		t.Fatalf("expected an exact token match to outscore a stemmed one: exact=%.2f stemmed=%.2f",
+			matchScore(exact, terms, idf), matchScore(stemmed, terms, idf))
+	}
+}
