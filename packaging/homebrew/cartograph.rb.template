@@ -1,0 +1,52 @@
+# Homebrew Formula template for a `cartograph/tap` — docs/requirements/
+# phase9-global-install-and-daemon.md / ADR-0026 (Phase 9).
+#
+# NOT YET ACTIVATED. This is a template, not a formula in a real tap: a
+# Homebrew tap needs its own repository (`deatherick/homebrew-tap`,
+# Homebrew's own naming convention) containing a `Formula/cartograph.rb`
+# file with REAL version numbers and REAL sha256 checksums of a REAL
+# published release's assets — none of which exist until a version is
+# actually tagged and .github/workflows/release.yml has run (see that
+# workflow, and install.sh, which IS real and working today without
+# needing this). Creating the tap repository and cutting the first
+# release are both product decisions (what version number, when) for the
+# user to make, not this template to presume.
+#
+# To activate once a real vX.Y.Z release exists:
+#   1. Compute sha256 for cartograph_darwin_arm64.tar.gz and
+#      cartograph_linux_amd64.tar.gz from that release's assets
+#      (release.yml already publishes a checksums.txt alongside them).
+#   2. Fill in VERSION and both SHA256_* placeholders below.
+#   3. Create deatherick/homebrew-tap (if it doesn't exist) with this file
+#      at Formula/cartograph.rb.
+#   4. `brew install deatherick/tap/cartograph` then works.
+class Cartograph < Formula
+  desc "Local deterministic code context engine for AI coding agents"
+  homepage "https://github.com/deatherick/cartograph"
+  version "VERSION"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/deatherick/cartograph/releases/download/vVERSION/cartograph_darwin_arm64.tar.gz"
+      sha256 "SHA256_DARWIN_ARM64"
+    end
+  end
+
+  on_linux do
+    on_intel do
+      url "https://github.com/deatherick/cartograph/releases/download/vVERSION/cartograph_linux_amd64.tar.gz"
+      sha256 "SHA256_LINUX_AMD64"
+    end
+  end
+
+  def install
+    bin.install "ctx"
+    bin.install "ctxd"
+    bin.install "ctxmcp"
+  end
+
+  test do
+    system "#{bin}/ctx", "languages", testpath
+  end
+end

@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"github.com/deatherick/cartograph/internal/render"
 	"github.com/deatherick/cartograph/internal/service"
 	"github.com/deatherick/cartograph/internal/similar"
+	"github.com/deatherick/cartograph/internal/sysservice"
 )
 
 func main() {
@@ -60,6 +62,8 @@ func main() {
 		err = runPath(svc, os.Args[2:])
 	case "project":
 		err = runProject(os.Args[2:])
+	case "service":
+		err = runService(os.Args[2:])
 	case "similar":
 		err = runSimilar(svc, os.Args[2:])
 	case "duplicates":
@@ -95,6 +99,9 @@ Usage:
   ctx project add <name> <path>    register <path> under <name>
   ctx project list                 show every registered project
   ctx project remove <name>        unregister <name>
+  ctx service install [--web addr]   install ctxd as a persistent system service (launchd/systemd --user)
+  ctx service uninstall              remove it
+  ctx service status                 report whether it's installed/running
   ctx similar <path> <name> [--file <substring>]   undecided duplicate/similarity candidates involving one entity
   ctx duplicates <path> [--threshold N]   every undecided duplicate/similarity pair repo-wide (default threshold 0.6)
   ctx decide <path> <nameA> <nameB> <decision> [--a-file <sub>] [--b-file <sub>]   record a human decision on one pair
@@ -563,4 +570,87 @@ func runProject(args []string) error {
 	default:
 		return fmt.Errorf("unknown project subcommand %q — usage: ctx project add|list|remove", args[0])
 	}
+}
+
+// defaultServiceWebAddr matches cmd/ctxd's own --web default — a service
+// install always sets --web explicitly (never empty), per ADR-0026's own
+// decision that a system-service ctxd needs its HTTP API listening
+// unconditionally (see internal/sysservice.Config's doc), but the DEFAULT
+// value should still be the one a user already sees from running `ctxd`
+// interactively, not a second, silently-different default to remember.
+const defaultServiceWebAddr = "127.0.0.1:7420"
+
+// runService implements `ctx service install|uninstall|status` (ADR-0026,
+// Phase 9) — internal/sysservice does the actual OS-native work
+// (launchd/systemd --user); this is just CLI parsing plus resolving
+// where the ctxd binary actually is, which is an installer-UX decision
+// (internal/sysservice.Config's own doc), not something that package
+// decides for itself.
+func runService(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf(`usage: ctx service install [--web addr]
+   or: ctx service uninstall
+   or: ctx service status`)
+	}
+	switch args[0] {
+	case "install":
+		ctxdPath, err := findCtxd()
+		if err != nil {
+			return err
+		}
+		webAddr := defaultServiceWebAddr
+		if v := flagValue(args, "--web"); v != "" {
+			webAddr = v
+		}
+		if err := sysservice.Install(sysservice.Config{CtxdPath: ctxdPath, WebAddr: webAddr}); err != nil {
+			return err
+		}
+		path, _ := sysservice.FilePath()
+		fmt.Printf("Installed ctxd as a persistent system service (%s), running %s --web %s\n", path, ctxdPath, webAddr)
+		fmt.Println("It starts automatically at login from now on, and is running right now.")
+		return nil
+	case "uninstall":
+		if err := sysservice.Uninstall(); err != nil {
+			return err
+		}
+		fmt.Println("Uninstalled the ctxd system service (if it was installed).")
+		return nil
+	case "status":
+		st, err := sysservice.CheckStatus()
+		if err != nil {
+			return err
+		}
+		path, _ := sysservice.FilePath()
+		fmt.Printf("service file: %s\n", path)
+		fmt.Printf("installed:    %v\n", st.Installed)
+		fmt.Printf("running:      %v\n", st.Running)
+		if st.Detail != "" {
+			fmt.Printf("detail:       %s\n", st.Detail)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown service subcommand %q — usage: ctx service install|uninstall|status", args[0])
+	}
+}
+
+// findCtxd locates the ctxd binary to register as a service: first next
+// to the currently-running ctx binary itself (the common case — both
+// built together by `make build` or installed together by the same
+// installer, docs/requirements/phase9-global-install-and-daemon.md's own
+// "downloads/builds the ctx AND ctxd binaries" requirement), falling back
+// to PATH (a user who installed them separately, or into different
+// directories). A clear error, never a guess, if neither finds it — `ctx
+// service install` must never silently register a service pointed at a
+// binary that doesn't exist.
+func findCtxd() (string, error) {
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), "ctxd")
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	if path, err := exec.LookPath("ctxd"); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("could not find the ctxd binary (looked next to this ctx binary and on PATH) — build it with `make build` or `go build ./cmd/ctxd`, or ensure it's on PATH, before running `ctx service install`")
 }

@@ -21,8 +21,9 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 3d — Daemon watcher (V0: full reindex on change, not per-file incremental) | ✅ Done (ADR-0012) — `internal/watch` + real `cmd/ctxd`, verified end-to-end |
 | 6 — Web UI: integrated Overview (table+detail+graph+impact tabs), navigable graph, git-diff impact | ✅ Done (ADR-0013/0015) — served by `ctxd --web`, React+Vite (reversed from V0's no-build choice) |
 | 4 — Impact analysis (`ctx impact`, git-diff-driven blast radius) | ✅ Done (ADR-0014) — unblocks the Web UI's Impact view |
-| 5 — Duplicate/similarity engine (Web UI's Duplicates view depends on this) | ⬜ Post-MVP |
-| 7-9 — Cross-repo, learned relationships, AI, hardening | ⬜ Post-MVP |
+| 5 — Duplicate/similarity engine V0 + identifier normalization | ✅ Done (ADR-0021/ADR-0025) — 1.00 precision / 0.83 recall on the 24-pair labeled eval; AST tree-edit distance and a ≥120-pair eval set remain open |
+| 7-8 — Cross-repo, learned relationships, AI | ⬜ Post-MVP |
+| 9 — Hardening, installer, distribution | ✅ Done (ADR-0026) — see the deferred-list entry below for what still needs the user's own go-ahead (cutting a release, running the installer live) |
 
 ## What "MVP" means for this project
 
@@ -320,12 +321,19 @@ Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files
   extractor populates yet) remains identified as a real, low-cost addition worth revisiting.
 - **Cross-repo linking, learned relationships, agent policy files** (Phase 7).
 - **Optional AI provider integration, Ask AI** (Phase 8).
-- **Hardening, installer, distribution** (Phase 9) — global install (`ctx`/`ctxd` on `PATH`, no
-  clone/Go-toolchain required) and the daemon as a persistent system-level service (`launchd`/
-  `systemd --user`), with only `.cartograph.json` ever living inside a project directory.
-  Requirements captured in full at the user's explicit request:
+- ~~**Hardening, installer, distribution**~~ (Phase 9) — **done, ADR-0026**: `ctxd` with no
+  arguments watches every project in `~/.cartograph/projects.json` and reconciles against it every
+  5s (add/remove/restart a project with no daemon restart — verified live, not just read from the
+  code); `ctx service install/uninstall/status` registers `ctxd` as a real `launchd` user agent
+  (macOS) or `systemd --user` unit (Linux), one native mechanism per OS in its own build-tag file
+  (`internal/sysservice`); `install.sh` + `.github/workflows/release.yml` are real and working,
+  tested live against this repo (correctly falls back to a source-build message since no release
+  has been cut yet). Full requirements:
   [`docs/requirements/phase9-global-install-and-daemon.md`](docs/requirements/phase9-global-install-and-daemon.md).
-  Not started.
+  **Two things still need the user's own go-ahead, not built without it**: actually pushing a
+  `vX.Y.Z` tag (which makes `install.sh`'s download path real instead of falling back to source),
+  and actually running `ctx service install` for real on a live machine (registers a real,
+  persistent background service) — see ADR-0026's "what still needs a human decision."
 
 ## Immediate next steps, in order
 
@@ -483,3 +491,20 @@ This closes every item in the weighted "easy win" batch (Paths, Quality, Operati
     (`anchorFrom`/`contentHash` helpers copy-pasted identically across all four language
     extractors). AST tree-edit distance and the ≥120-pair eval set remain open, named again in
     ADR-0025.
+23. ~~Phase 9 (global install, system-level daemon)~~ — done, ADR-0026, at the user's explicit
+    request ("hagamos la fase 9 de una vez y cerremos el tema y las preguntas abiertas"), after
+    first confirming a review-only pass of the requirements doc, then a separate, later message
+    confirming the actual build. Closes the daemon-side gap named across `docs/MVP.md` and the
+    requirements doc since ADR-0019: `ctxd` with no arguments watches every project in
+    `~/.cartograph/projects.json` and reconciles against it every 5s — add/remove/restart a project
+    with no daemon restart, verified live under a temp `$HOME` (never the real user's
+    `~/.cartograph`). `internal/httpserver.ProjectRegistry` replaces the old static project slice
+    so this is visible through the same HTTP API immediately. `ctx service install/uninstall/
+    status` (`internal/sysservice`) registers `ctxd` as a real `launchd` agent (macOS) / `systemd
+    --user` unit (Linux), one file per OS behind a build tag, not a `runtime.GOOS` switch — the
+    exact bug category `edge-case-backlog.md` G3 already catalogued from Grafel's own #6218,
+    followed rather than rediscovered. `install.sh` + `.github/workflows/release.yml` are real,
+    tested live against this repo (correctly falls back to a source-build message today, since no
+    release has been cut). Two things deliberately NOT done without the user's own separate
+    go-ahead: pushing an actual `vX.Y.Z` release tag, and running `ctx service install` for real on
+    a live machine (registers a real, persistent background service) — see ADR-0026.

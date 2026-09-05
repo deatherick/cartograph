@@ -11,12 +11,23 @@
 // project add` (internal/project.Resolve), same as every `ctx` CLI
 // command already does.
 //
-// Still no system-level installation (launchd/systemd) and no daemon
-// socket/RPC — every project's status is reachable only through the same
-// HTTP server the web UI already uses (--web). Phase 9 scope (global
-// install, running as a system service) is captured in
-// docs/requirements/phase9-global-install-and-daemon.md at the user's
-// explicit request but not built.
+// Two modes, since ADR-0026 (Phase 9):
+//   - `ctxd <path> [<path>...]` — the original, explicit-argument mode,
+//     UNCHANGED: a fixed set of projects for this process's whole
+//     lifetime, exactly as ADR-0019 built it.
+//   - `ctxd` with NO arguments — the mode a system-level service install
+//     (`ctx service install`) actually uses: watches every project
+//     currently in `~/.cartograph/projects.json` (internal/project), and
+//     RECONCILES against that registry every registryPollInterval, so
+//     `ctx project add`/`remove` while this daemon is already running
+//     takes effect with no restart — see reconcile's own doc. This is
+//     the "real ctxd project add/list for an already-running daemon" gap
+//     docs/MVP.md and docs/requirements/phase9-global-install-and-daemon.md
+//     both named as still open before this ADR.
+//
+// System-level installation (launchd on macOS, systemd --user on Linux)
+// is `ctx service install/uninstall/status`, internal/sysservice — see
+// ADR-0026 and docs/requirements/phase9-global-install-and-daemon.md.
 package main
 
 import (
@@ -40,19 +51,49 @@ import (
 	"github.com/deatherick/cartograph/internal/watch"
 )
 
+// registryPollInterval is how often zero-argument mode re-reads
+// ~/.cartograph/projects.json to reconcile which projects it watches —
+// deliberately a different, coarser cadence than the Web UI's own 3-second
+// live-refresh poll (ADR-0019's usePoll): that one re-reads an in-memory
+// snapshot on every tick; this one does real file I/O against a registry
+// that changes far less often (a human running `ctx project add`, not a
+// continuously-updating stats view), so a slower cadence is the right
+// tradeoff, not an arbitrary mismatch.
+const registryPollInterval = 5 * time.Second
+
 func main() {
 	webAddr := flag.String("web", "127.0.0.1:7420", "address to serve the web UI on (127.0.0.1-only by default — see the project plan's permanent 'bind to localhost' restriction); empty disables it")
 	flag.Parse()
 	args := flag.Args()
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: ctxd [--web addr] <path> [<path>...]")
-		fmt.Fprintln(os.Stderr, "\nIndexes each <path> once, then watches it and incrementally re-indexes on every change until interrupted (Ctrl+C).")
-		fmt.Fprintln(os.Stderr, "Each <path> also accepts a name registered via `ctx project add`.")
-		fmt.Fprintln(os.Stderr, "Also serves a web UI (Phase 6) at --web (default 127.0.0.1:7420) unless --web=\"\", with a project switcher when more than one <path> is given.")
-		os.Exit(2)
-	}
 
 	svc := service.New() // the HTTP/Web UI read side only — never used for indexing itself, see watchProject
+	registry := httpserver.NewProjectRegistry(nil)
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+
+	if *webAddr != "" {
+		go func() {
+			handler := httpserver.New(svc, registry)
+			fmt.Printf("ctxd: web UI at http://%s (operational status: /api/operations)\n", *webAddr)
+			if err := http.ListenAndServe(*webAddr, handler); err != nil { //nolint:gosec // 127.0.0.1 default binding is the security boundary here, not timeouts on a local single-user dev tool
+				fmt.Fprintf(os.Stderr, "ctxd: web UI server error: %v\n", err)
+			}
+		}()
+	}
+
+	if len(args) > 0 {
+		runFixedSet(args, registry, sig)
+		return
+	}
+	runRegistryReconciled(registry, sig)
+}
+
+// runFixedSet is ADR-0019's original explicit-argument mode, unchanged: a
+// fixed set of projects for the whole process lifetime, each resolved
+// through the project registry the same way every `ctx` CLI command
+// already does (internal/project.Resolve).
+func runFixedSet(args []string, registry *httpserver.ProjectRegistry, sig <-chan os.Signal) {
 	handles := make([]httpserver.Project, len(args))
 	for i, arg := range args {
 		root := project.Resolve(arg)
@@ -61,23 +102,12 @@ func main() {
 		if root != arg {
 			name = arg // arg was a registered project name — keep it as the friendlier identity
 		}
-		handles[i] = httpserver.Project{Name: name, Repo: repo, Root: root, Ops: opstatus.New()}
+		h := httpserver.Project{Name: name, Repo: repo, Root: root, Ops: opstatus.New()}
+		handles[i] = h
+		registry.Set(h)
 	}
 
-	if *webAddr != "" {
-		go func() {
-			handler := httpserver.New(svc, handles)
-			fmt.Printf("ctxd: web UI at http://%s (operational status: /api/operations)\n", *webAddr)
-			if err := http.ListenAndServe(*webAddr, handler); err != nil { //nolint:gosec // 127.0.0.1 default binding is the security boundary here, not timeouts on a local single-user dev tool
-				fmt.Fprintf(os.Stderr, "ctxd: web UI server error: %v\n", err)
-			}
-		}()
-	}
-
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	done := make(chan struct{})
-
 	var wg sync.WaitGroup
 	for _, h := range handles {
 		wg.Add(1)
@@ -91,6 +121,105 @@ func main() {
 	fmt.Println("ctxd: shutting down")
 	close(done)
 	wg.Wait()
+}
+
+// runningProject is what runRegistryReconciled tracks per watched
+// project: the root it's currently watching (so reconcile can detect a
+// project RE-registered at a new path — internal/project.Add's own
+// "re-adding points it at a new location" semantics — and restart its
+// watcher, not just add/remove by name alone) and its own done channel.
+type runningProject struct {
+	root string
+	done chan struct{}
+}
+
+// runRegistryReconciled is the zero-argument mode (ADR-0026): starts by
+// watching every project in `~/.cartograph/projects.json`
+// (internal/project, the same registry `ctx project add/list/remove`
+// manages), then reconcile keeps that set current for as long as ctxd
+// keeps running.
+func runRegistryReconciled(registry *httpserver.ProjectRegistry, sig <-chan os.Signal) {
+	fmt.Println("ctxd: no <path> given — watching every project registered via `ctx project add` (~/.cartograph/projects.json), reconciling every", registryPollInterval)
+
+	running := map[string]runningProject{}
+	var wg sync.WaitGroup
+
+	start := func(name, root string) {
+		repo := service.RepoName(root)
+		h := httpserver.Project{Name: name, Repo: repo, Root: root, Ops: opstatus.New()}
+		registry.Set(h)
+		done := make(chan struct{})
+		running[name] = runningProject{root: root, done: done}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			watchProject(done, h)
+		}()
+	}
+	stop := func(name string) {
+		close(running[name].done)
+		delete(running, name)
+		registry.Remove(name)
+	}
+
+	reconcile(running, start, stop) // seed the initial set before the first tick
+
+	ticker := time.NewTicker(registryPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			reconcile(running, start, stop)
+		case <-sig:
+			fmt.Println("ctxd: shutting down")
+			for name := range running {
+				close(running[name].done)
+			}
+			wg.Wait()
+			return
+		}
+	}
+}
+
+// reconcile re-reads the project registry and diffs it against running:
+// starts watching anything newly registered, stops watching anything
+// removed, and RESTARTS watching anything whose registered path changed
+// (see runningProject's own doc for why) — a stale watcher pointed at an
+// old path would otherwise keep running forever, silently never seeing
+// the project's real, current location again.
+func reconcile(running map[string]runningProject, start func(name, root string), stop func(name string)) {
+	projects, err := project.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ctxd: reading project registry: %v\n", err)
+		return
+	}
+	if len(projects) == 0 && len(running) == 0 {
+		fmt.Fprintln(os.Stderr, "ctxd: no projects registered yet — run `ctx project add <name> <path>`; watching nothing until then")
+	}
+
+	registered := make(map[string]string, len(projects)) // name -> path
+	for _, p := range projects {
+		registered[p.Name] = p.Path
+	}
+
+	for name := range running {
+		if _, ok := registered[name]; !ok {
+			fmt.Printf("ctxd: %q removed from the project registry — stopping its watcher\n", name)
+			stop(name)
+		}
+	}
+	for name, path := range registered {
+		if rp, ok := running[name]; ok {
+			if rp.root != path {
+				fmt.Printf("ctxd: %q re-registered at a new path — restarting its watcher (%s -> %s)\n", name, rp.root, path)
+				stop(name)
+				start(name, path)
+			}
+			continue
+		}
+		fmt.Printf("ctxd: %q added to the project registry — starting to watch %s\n", name, path)
+		start(name, path)
+	}
 }
 
 // watchProject runs one project's whole lifecycle: an initial full index
