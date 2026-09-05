@@ -1,8 +1,10 @@
 package similar
 
 import (
+	"fmt"
 	"hash/fnv"
 	"unicode"
+	"unicode/utf8"
 )
 
 // shingleSize is how many consecutive normalized tokens form one shingle —
@@ -113,12 +115,102 @@ func stripComments(src string) string {
 	return string(out)
 }
 
+// structuralKeywords is the shared set of keyword-like tokens kept
+// LITERAL by normalizeIdentifiers — a union across every language this
+// project extracts (TS/JS, Go, C#, Python), not per-language, since
+// tokenize.go has always been a generic, not-per-language lexer (see its
+// own doc). A keyword's presence is real structural signal ("this is a
+// loop", "this is a conditional") that identifier normalization must NOT
+// erase; only a name a human CHOSE (a variable, a called function) is
+// fair game for normalization. Deliberately a starter list, not
+// exhaustive — grows if a real fixture's measured recall/precision shows
+// a gap, the same discipline every other tuned list in this project
+// follows (docs/adr/0021's own "first value that clears the bar" note).
+var structuralKeywords = map[string]bool{
+	// Control flow (shared across all four languages, sometimes spelled
+	// differently — both spellings included where they differ).
+	"if": true, "else": true, "elif": true, "for": true, "while": true,
+	"do": true, "switch": true, "case": true, "default": true,
+	"break": true, "continue": true, "return": true, "yield": true,
+	"try": true, "catch": true, "except": true, "finally": true,
+	"throw": true, "raise": true, "goto": true, "pass": true,
+	// Declarations.
+	"function": true, "def": true, "class": true, "struct": true,
+	"interface": true, "enum": true, "record": true, "delegate": true,
+	"const": true, "let": true, "var": true, "func": true,
+	"type": true, "namespace": true, "package": true, "module": true,
+	// Modifiers/visibility.
+	"public": true, "private": true, "protected": true, "internal": true,
+	"static": true, "readonly": true, "final": true, "abstract": true,
+	"virtual": true, "override": true, "sealed": true, "async": true,
+	"await": true, "lambda": true,
+	// Imports.
+	"import": true, "from": true, "using": true, "require": true,
+	"export": true, "as": true,
+	// Values/operators-as-words.
+	"true": true, "false": true, "null": true, "nil": true, "none": true,
+	"new": true, "this": true, "self": true, "super": true, "base": true,
+	"in": true, "is": true, "not": true, "and": true, "or": true,
+	"void": true, "extends": true, "implements": true,
+}
+
+// normalizeIdentifiers rewrites tokens for structural (shingle-based)
+// comparison ONLY — never for the raw token stream tokenize() itself
+// returns, which stays a faithful lexing (see tokenize's own tests). Every
+// identifier-looking token that ISN'T a shared structural keyword
+// (structuralKeywords) is replaced with a placeholder ("ID1", "ID2", ...)
+// numbered by first appearance WITHIN this one token stream (one function
+// body, scoped per call — Find() tokenizes and normalizes one entity at a
+// time) — the same identifier reused later in the same function keeps the
+// same placeholder, so a real reuse PATTERN (e.g. "the loop variable
+// feeds the accumulator") still shows up as a shingle match, while the
+// actual chosen name ("total" vs "weight") no longer prevents one. This is
+// the "blind renaming" technique real clone-detection tools (NiCad,
+// SourcererCC) use — deliberately not scoped to only DECLARED names (vs.
+// names merely referenced/called), since a heuristic tokenizer has no real
+// declaration/reference distinction to draw on; ADR-0021 names this
+// exact scope reduction (#2) as the one this closes.
+func normalizeIdentifiers(tokens []string) []string {
+	out := make([]string, len(tokens))
+	ids := map[string]string{}
+	for i, tok := range tokens {
+		if !looksLikeIdentifier(tok) || structuralKeywords[tok] {
+			out[i] = tok
+			continue
+		}
+		placeholder, ok := ids[tok]
+		if !ok {
+			placeholder = fmt.Sprintf("ID%d", len(ids)+1)
+			ids[tok] = placeholder
+		}
+		out[i] = placeholder
+	}
+	return out
+}
+
+// looksLikeIdentifier reports whether tok is an identifier-shaped token
+// tokenize() could have produced — i.e. not NUM/STR (tokenize's own
+// literal placeholders) and not a single-character punctuation/operator
+// token (tokenize emits those one rune at a time). A real identifier
+// literally named "NUM" or "STR" is an acknowledged, negligible edge case
+// (would be kept literal instead of normalized) — not worth a more
+// elaborate tagging scheme in tokenize() itself for this heuristic.
+func looksLikeIdentifier(tok string) bool {
+	if tok == "NUM" || tok == "STR" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(tok)
+	return unicode.IsLetter(r) || r == '_'
+}
+
 // shingleHashes builds the set of hashed k-shingles (contiguous token
 // windows of shingleSize) for tokens — the input to MinHash signature
 // computation (minhash.go). A token stream shorter than shingleSize
 // becomes exactly one shingle covering everything it has, so very short
 // (but not filtered-out-as-trivial) entities still get a real fingerprint
-// rather than an empty one.
+// rather than an empty one. Callers pass normalizeIdentifiers(tokenize(src))
+// for structural comparison, not tokenize's raw output — see that
+// function's doc.
 func shingleHashes(tokens []string) map[uint64]struct{} {
 	set := map[uint64]struct{}{}
 	if len(tokens) == 0 {

@@ -14,7 +14,7 @@ import (
 //
 // HONEST SCOPE NOTE: the master plan's own exit criterion for Phase 5
 // names a labeled dataset of >=120 pairs. This fixture is deliberately
-// much smaller (8 real functions, 22 pairs) — built to be measured
+// much smaller (8 real functions, 24 pairs) — built to be measured
 // honestly and documented, not to claim it meets that larger target. See
 // the ADR for why a smaller, real, hand-verified set was chosen over a
 // larger but synthetic/unverified one within this session's scope.
@@ -158,14 +158,13 @@ func TestEval_PrecisionAndRecall(t *testing.T) {
 
 	// The measured bar: zero false positives on this fixture (precision
 	// must be exactly 1.0 — this V0 would rather under-report than
-	// wrongly flag two unrelated functions), and the "exact"/"renamed"
-	// categories must be found — both pass through LSH candidate
-	// generation easily (very high token-shingle overlap). Two categories
-	// are logged but NOT required to pass, both true funnel-design limits
-	// (not implementation bugs), documented in docs/adr/0021:
-	//   - "structural" (same shape, different variable names AND a
-	//     different inner operation) is genuinely harder for a non-
-	//     identifier-normalizing tokenizer (see tokenize.go's doc).
+	// wrongly flag two unrelated functions), and the "exact"/"renamed"/
+	// "structural" categories must all be found — identifier
+	// normalization (ADR-0025, tokenize.go's normalizeIdentifiers) closed
+	// "structural" (same shape, different variable names) for real,
+	// measured here, not assumed. One category is still logged but NOT
+	// required to pass, a true funnel-design limit (not an implementation
+	// bug), documented in docs/adr/0021:
 	//   - "behavioral" as tested here is a PURE case — near-zero
 	//     structural token overlap, only the call graph matches. The
 	//     master plan's own funnel runs behavioral scoring over L2's
@@ -175,7 +174,7 @@ func TestEval_PrecisionAndRecall(t *testing.T) {
 	if falsePos > 0 {
 		t.Errorf("expected zero false positives on this fixture, got %d", falsePos)
 	}
-	mustFind := map[string]bool{"exact": true, "renamed": true}
+	mustFind := map[string]bool{"exact": true, "renamed": true, "structural": true}
 	for _, lp := range labeledPairs {
 		if !lp.want || !mustFind[lp.category] {
 			continue

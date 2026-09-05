@@ -295,13 +295,14 @@ Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files
   original exit criterion — across 20 real historical commits, the proposed test set actually
   contains the tests that commit touched, ≥80% of the time — was not run; needs a real repo with
   meaningful history/coverage to validate against).
-- ~~Duplicate/Similarity Engine~~ (Phase 5) — **V0 done**, ADR-0021: `internal/similar`'s real
-  funnel (exact fingerprint -> MinHash+LSH candidate generation -> structural+behavioral scoring),
-  `ctx similar/duplicates/decide` (CLI), `context_similar/duplicates/decide` (MCP), decision
-  persistence. Honestly narrower than the full ask: no L2 bounded AST tree-edit distance (token-
-  shingle Jaccard stands in), no renamed-identifier normalization, and the labeled eval set is 24
-  pairs, not the master plan's ≥120 — measured precision 1.00 / recall 0.50 on that smaller set,
-  reported plainly, not rounded up. The duplicate-decision UI concept (a Web UI panel) remains
+- ~~Duplicate/Similarity Engine~~ (Phase 5) — **V0 done**, ADR-0021, **identifier normalization
+  added**, ADR-0025: `internal/similar`'s real funnel (exact fingerprint -> MinHash+LSH candidate
+  generation -> structural+behavioral scoring), `ctx similar/duplicates/decide` (CLI),
+  `context_similar/duplicates/decide` (MCP), decision persistence. Still honestly narrower than the
+  full ask: no L2 bounded AST tree-edit distance (token-shingle Jaccard stands in), and the labeled
+  eval set is 24 pairs, not the master plan's ≥120 — but renamed-identifier normalization (ADR-0021's
+  originally-named gap) is now closed: measured precision 1.00 / recall **0.83** (up from 0.50) on
+  that same 24-pair set, reported plainly. The duplicate-decision UI concept (a Web UI panel) remains
   not built — see the Web UI item below.
 - **Web UI beyond ADR-0013/0015/0019's scope** — entity classification/tagging, pattern
   identification as a first-class surface, filtering as a cross-cutting primitive, a Duplicates
@@ -468,3 +469,17 @@ This closes every item in the weighted "easy win" batch (Paths, Quality, Operati
     or deepening the Similarity Engine (AST tree-edit distance, identifier normalization, a larger
     labeled eval set, Web UI/Context Compiler integration) — prioritized by real usage feedback.
     This closes the three-language plan (Go, C#, Python) set at the start of Phase 3.
+22. ~~Similarity Engine: identifier normalization~~ — done, ADR-0025, picked by the user over
+    closing C#'s open Context Compiler recall gap: `tokenize.go`'s `normalizeIdentifiers` (the
+    standard "blind renaming" clone-detection technique — every identifier-looking token not in a
+    shared `structuralKeywords` list, spanning all four supported languages, becomes a placeholder
+    numbered by first appearance within one entity's own token stream). Measured, not assumed:
+    recall on the 24-pair labeled eval set moved 0.50 -> 0.83, precision held exactly 1.00 (zero new
+    false positives). A real regression the measurement itself caught before shipping: two
+    trivially-short eval-fixture functions (`getX`/`getY`) collapsed to an identical normalized
+    token stream, becoming a false positive — fixed by raising `minBodyTokens` 12 -> 15 (re-measured
+    at several values to confirm 15 is the smallest sufficient one). Spot-checked live against this
+    project's own self-hosted source: correctly surfaced a real, previously-invisible duplication
+    (`anchorFrom`/`contentHash` helpers copy-pasted identically across all four language
+    extractors). AST tree-edit distance and the ≥120-pair eval set remain open, named again in
+    ADR-0025.
