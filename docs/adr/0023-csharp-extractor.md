@@ -179,3 +179,29 @@ measurement has never yet cleared this bar on the first pass, and this one does 
 - **Not project-reference-aware.** A `.csproj`'s actual `<ProjectReference>` edges are not read;
   namespace resolution is exact-match-only across every `.csproj` this run's walk found, regardless
   of whether one project actually references another (D2).
+
+## Update: real-repo recall corrected from 0.65 to 0.40 (test detection removed an inflated measurement)
+
+A later change (the known-issues sweep, docs/MVP.md) added xUnit/NUnit/MSTest attribute-based
+test detection — exactly the follow-up this ADR's own "What this is explicitly NOT" section
+flagged as deliberately deferred. Reclassifying `[Fact]`-attributed methods from `KindMethod` to
+`KindTest` (correctly excluding them from Context Compiler seeding — the same "test labels are
+not useful seeds" rule Go's extractor already documented) dropped `fixtures/tasks/eshoponweb.json`'s
+measured recall@gold from 0.65 to **0.40**.
+
+Root-caused via a `git worktree` bisect across every commit between this ADR's original
+measurement and the fix, holding the eShopOnWeb clone fixed: before test detection existed, a
+`[Fact]`-attributed test method was an ordinary method entity, eligible to seed a capsule like
+any other — and a test method's own name (`BasketAddItem.IncrementsQuantityOfItemIfPresent`)
+frequently restates a task's own vocabulary almost verbatim, making it a spuriously strong
+term-overlap match. Once seeded, that test method's own body (typically constructing the exact
+domain objects it tests) gave graph expansion an accidental bridge into the real gold classes —
+an artifact of test code incidentally referencing the same types, unrelated to genuinely
+understanding the production task. The 0.65 this ADR reported was measuring that artifact, not
+real seeding/ranking quality.
+
+**Not a new regression, and not this ADR's own extraction work being wrong** — the C# extractor
+did exactly what this ADR describes; the recall number was always downstream of the Context
+Compiler's seeding/ranking (ADR-0022's own explicitly-deferred territory, "a real ranking
+function, not another patch"), and 0.40 is simply a more honest measurement of it than 0.65 ever
+was. Left open, same as before this update — see docs/MVP.md's current entry for the full account.
