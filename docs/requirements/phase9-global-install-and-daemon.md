@@ -3,10 +3,37 @@
 Captured ahead of the phase that implements it — the same pattern
 `docs/requirements/phase6-web-ui.md` already uses: write down what the user actually asked for in
 full, so it isn't reconstructed from memory later, without starting the implementation before its
-phase arrives. **Nothing in this document is built yet.** Phase 3d (immediately following this
-capture) builds the daemon's watching/incremental-indexing *logic*; this document is about how
-that daemon gets **installed and run persistently at the system level**, which is Phase 9 scope
-(hardening, installer, distribution) per `docs/MVP.md`.
+phase arrives. **Nothing in this document is built yet — reviewed and refined on 2026-09-05 at
+the user's explicit request, still deliberately not started.** Phase 3d (immediately following
+this capture) builds the daemon's watching/incremental-indexing *logic*; this document is about
+how that daemon gets **installed and run persistently at the system level**, which is Phase 9
+scope (hardening, installer, distribution) per `docs/MVP.md`.
+
+## What has shipped since this was first captured (2026-08-29) — context for the review below
+
+Everything below is REAL, DONE infrastructure this Phase 9 work will build on top of — named here
+so the rest of this document can be concrete about what's still a genuine open question versus
+what already has a real, working answer elsewhere in the codebase:
+
+- **Phase 3d, true incremental indexing** (ADR-0012, ADR-0020) — `ctxd` is real, watches and
+  re-indexes incrementally, not a placeholder.
+- **Multi-project daemon** (ADR-0019) — `ctxd <path> [<path>...]` already watches several projects
+  concurrently from one process; each `<path>` argument is already resolved through the project
+  registry below (`cmd/ctxd/main.go`'s own doc comment references it directly).
+- **The project registry** (ADR-0016, `internal/project`) — `ctx project add/list/remove` already
+  persists a name→path mapping at **`~/.cartograph/projects.json`**, a real file at a real,
+  existing path, not a placeholder location. This directly answers part of "explicitly not decided
+  here" below (see that section).
+- **A working, read-only HTTP API** (ADR-0013/0015/0018/0019, `internal/httpserver`) — `ctxd --web`
+  already serves `/api/projects`, `/api/stats`, `/api/graph`, `/api/find`, `/api/inspect`,
+  `/api/related`, `/api/impact`, `/api/source`, `/api/operations` to a running daemon. This is a
+  real, precedented answer to "can `ctx` talk to a running `ctxd` over HTTP" (yes, today, for
+  reads) — see "Explicitly not decided here" below for what this does and doesn't settle.
+- **The one still-open gap this surfaces most directly**: `docs/MVP.md`'s own known-issues list
+  already names it — "a real `ctxd project add/list` that adds/removes a project from an
+  *already-running* daemon (today the project list is fixed at `ctxd` startup)." This document's
+  "How `ctx init` and the daemon connect" section below is the same gap, from the installer's
+  point of view instead of the CLI's.
 
 ## The user's request, verbatim intent
 
@@ -52,26 +79,51 @@ daemon's per-project state, logs) stays out of the project tree entirely.
 | Lives in the project directory | Lives outside it |
 |---|---|
 | `.cartograph.json` — language selection (ADR-0011), the only project-level setting today | `~/.cartograph/<repo>-<hash>/` — the binary snapshot, session ledger (already the case since ADR-0005/0003's `store.RepoDir`; this requirement makes it a hard invariant, not an implementation detail) |
-| (nothing else) | The daemon's own per-project watch state (file hashes, debounce timers, exclusion/quarantine state — Phase 3d) |
-| | Daemon logs, PID/socket file, its own config (which projects it watches) — a single global location (XDG-style: `~/.config/cartograph/`, `~/.cache/cartograph/`, or reusing `~/.cartograph/` for all of it — a Phase 9 implementation decision, not decided here) |
+| (nothing else) | `~/.cartograph/projects.json` — which projects are registered at all (ADR-0016, real, already the answer to "which projects does the daemon know about" — see the section above) |
+| | The daemon's own per-project watch state (file hashes, debounce timers, exclusion/quarantine state — Phase 3d) |
+| | Daemon logs, PID/lock file, launch-agent/service-unit definitions — still a real Phase 9 implementation decision (XDG-style `~/.config/cartograph/`+`~/.cache/cartograph/`? reuse `~/.cartograph/` for these too, alongside `projects.json` and the snapshots?), narrower now that `projects.json`'s own location is already settled by ADR-0016, not invented here |
 
 The `.cartograph.json` / `~/.cartograph/` split already exists (ADR-0005 chose a derived,
 disposable cache outside the repo specifically so deleting it is always safe); this requirement
 is that principle extended to the daemon's own state, not a new one.
 
-## How `ctx init` and the daemon connect (once both exist)
+## How `ctx init` and the daemon connect
 
-Once Phase 3d's daemon logic exists and Phase 9 installs it globally, `ctx init` (ADR-0011) is the
-natural place to also **register** a project with the running daemon — so a user runs the wizard
-once and the project is both configured (`.cartograph.json`) and watched (via the daemon), without
-a separate registration step. This document does not specify that command's exact shape (`ctxd
-project add`? an RPC `ctx init` makes to a running daemon?) — that is Phase 9 implementation work,
-captured here only as the intended connection point.
+Both halves of this connection already exist independently today — `ctx init` (ADR-0011) writes
+`.cartograph.json`; `ctx project add` (ADR-0016) writes an entry to `~/.cartograph/projects.json`;
+`ctxd <path>...` (ADR-0019) watches whatever paths/names it's given at startup, each resolved
+through that same registry. **What's still missing is the live wire between them**: adding a
+project to the registry while a global `ctxd` is already running does not make that `ctxd` start
+watching it — the process would need to be restarted with the new path added to its argument
+list. Two concrete shapes for closing this, neither built, both worth naming explicitly now that
+the pieces around them are real (not two hypothetical designs in a vacuum):
+
+1. **`ctxd` reads `projects.json` itself, not just its own argv.** At startup (or once installed
+   as the system-level service this document is about), `ctxd` run with NO path arguments watches
+   every project currently in the registry, and picks up additions by polling the registry file
+   for changes (the same debounce/re-check pattern its own file watcher already uses for source
+   changes) — no new IPC needed, `ctx project add` just writes a file the daemon already knows how
+   to re-read.
+2. **A write-capable HTTP endpoint.** `internal/httpserver` already serves a real, working
+   READ-ONLY API to a running `ctxd` (`/api/projects` et al., listed above) — a `POST
+   /api/projects` (add) / `DELETE /api/projects/<name>` (remove) extending that same server would
+   let `ctx project add` (or `ctx init`) notify an already-running daemon directly, no polling
+   delay. Needs the daemon's web server to be listening in every real deployment for this to work
+   universally (today `--web` is optional — a decision this document's installer design should
+   make explicit, not inherit by accident).
+
+Option 1 is simpler and needs no protocol design; option 2 is more immediate and reuses a
+component that already exists for a different reason. Not decided here — a real Phase 9
+implementation choice, now made concrete instead of an open blank.
 
 ## Explicitly not decided here
 
-- Whether the daemon talks to `ctx` over a Unix socket, a local HTTP port, or something else —
-  Phase 9 implementation.
+- **Whether the daemon talks to `ctx` over a Unix socket, a local HTTP port, or something else** —
+  narrower than when this was first written: a real, working HTTP transport already exists
+  (`internal/httpserver`, today read-only, optional via `--web`), so this is no longer "pick a
+  transport from scratch" but specifically "extend the existing HTTP API to accept writes, make
+  `--web` non-optional for a system-service install, or build something else instead" — see "How
+  `ctx init` and the daemon connect" above for the two shapes actually on the table.
 - Exact installer mechanism (shell script vs. Homebrew tap vs. both) — both are plausible; `docs/MVP.md`'s
   existing Phase 9 entry already names "Homebrew tap + script," kept as-is here.
 - Windows support — out of scope until a real need appears (this project's CI matrix is macOS +
@@ -79,6 +131,10 @@ captured here only as the intended connection point.
 
 ## Status
 
-Requirement captured, 2026-08-29. Tracked in `docs/MVP.md`'s deferred list under Phase 9. Not
-started — Phase 3d (daemon watching/incremental-indexing logic, no system-service installation)
-is next.
+Requirement captured 2026-08-29; reviewed and refined 2026-09-05 at the user's explicit request
+(Go, C#, and Python extraction — Phase 3a/3b/3c — and the Similarity Engine's identifier
+normalization — ADR-0025 — landed in between). Tracked in `docs/MVP.md`'s deferred list under
+Phase 9. **Still not started** — every cross-reference added in this review points at code that
+already exists for other reasons (ADR-0016, ADR-0019, ADR-0018), not at anything built for Phase 9
+itself; nothing in this document has been implemented, and per the user's own standing instruction
+it stays that way until asked for again, explicitly, a third time.
