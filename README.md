@@ -18,10 +18,14 @@ change), `ctx impact`/git-diff blast radius, `ctx duplicates`/`similar`/`decide`
 and impact analysis, all in one workspace — see [ADR-0015](docs/adr/0015-react-web-ui.md)) are all
 built, tested, and measured against both a real coding agent (ADR-0009) and this project's own
 real source (ADR-0010: 0.1% bug_rate self-hosting; ADR-0023: 0.0% bug_rate on a real C# repo;
-ADR-0024: 0.0% bug_rate on a real Python repo). See [`docs/MVP.md`](docs/MVP.md) for the full
-picture and [`docs/adr/`](docs/adr/) for how every decision was made. Functional via CLI, MCP, and
-a browser today — every originally-planned language (Go, C#, Python) is now built. Global
-system-level install is still ahead — see the [known limitations](#known-limitations) below.
+ADR-0024: 0.0% bug_rate on a real Python repo). Global install and a system-level `ctxd` service
+(Phase 9, [ADR-0026](docs/adr/0026-phase9-global-install-and-daemon.md)) are built too:
+`ctx service install` registers `ctxd` as a real `launchd`/`systemd --user` service, and `ctxd`
+with no arguments watches every project you've registered, live — see
+[Global install](#global-install-and-running-ctxd-as-a-service) below. See
+[`docs/MVP.md`](docs/MVP.md) for the full picture and [`docs/adr/`](docs/adr/) for how every
+decision was made. Functional via CLI, MCP, and a browser today — every originally-planned
+language (Go, C#, Python) is built, and so is Phase 9.
 
 ## Prerequisites
 
@@ -35,6 +39,17 @@ system-level install is still ahead — see the [known limitations](#known-limit
 - macOS or Linux (CI runs both; Windows is untested)
 
 ## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/deatherick/cartograph/main/install.sh | sh
+```
+
+Downloads `ctx`/`ctxd`/`ctxmcp` for your OS/arch (macOS or Linux; no `sudo`, no Go toolchain, no
+cloning this repo) and places them on `PATH` — see
+[Global install](#global-install-and-running-ctxd-as-a-service) below. **No release has been
+published yet** ([ADR-0026](docs/adr/0026-phase9-global-install-and-daemon.md) built the pipeline;
+cutting the first `vX.Y.Z` tag is still the maintainer's own call), so this currently prints a
+clear message and falls back to building from source:
 
 ```bash
 git clone https://github.com/deatherick/cartograph.git
@@ -158,10 +173,7 @@ serves the old one until you re-index by hand. `ctxd` does that automatically:
 Runs in the foreground until `Ctrl+C`. It re-indexes only the files a change actually affects — the
 changed file(s) plus anything that imports them ([ADR-0020](docs/adr/0020-true-incremental-indexing.md):
 a real cross-file rename in this project's own 105-file source completed in ~4ms, against ~960ms
-for a full reindex) — not the whole project every time. It doesn't yet run as a background system
-service — see
-[`docs/requirements/phase9-global-install-and-daemon.md`](docs/requirements/phase9-global-install-and-daemon.md)
-for that design, captured but not built yet.
+for a full reindex) — not the whole project every time.
 
 `ctxd` also watches more than one project at once — pass every `<path>` (each also accepts a name
 registered via `ctx project add`):
@@ -172,6 +184,32 @@ registered via `ctx project add`):
 
 See [ADR-0019](docs/adr/0019-daemon-multi-project-web-ui.md) for the design; the Web UI's project
 switcher (below) is how you pick which one to look at.
+
+### Global install and running `ctxd` as a service
+
+Run `ctxd` with **no path arguments** and it watches every project you've registered with `ctx
+project add` — `~/.cartograph/projects.json` — instead of a fixed list, reconciling against that
+registry every 5 seconds: `ctx project add`/`remove` while `ctxd` is already running takes effect
+live, no restart ([ADR-0026](docs/adr/0026-phase9-global-install-and-daemon.md)):
+
+```bash
+./bin/ctxd   # watches every registered project; add/remove more with `ctx project add/remove` anytime
+```
+
+To make `ctxd` a persistent background service instead of something you run and leave a terminal
+open for:
+
+```bash
+ctx service install     # registers ctxd as a launchd agent (macOS) or systemd --user unit (Linux)
+ctx service status       # is it installed? is it running?
+ctx service uninstall   # reverses it cleanly
+```
+
+It starts automatically at login from then on, watching whatever's registered via `ctx project
+add` at any given moment. Windows isn't supported yet. See ADR-0026 for how this is built (one
+file per OS behind a build tag, never a runtime OS check in shared code) and what still needs a
+deliberate go-ahead before it's used for real (cutting an actual release; running the installer
+live on a machine).
 
 ### Web UI
 
@@ -254,6 +292,11 @@ The honest list, kept current in [`docs/MVP.md`](docs/MVP.md#consolidated-known-
 - **Receiver-type inference is best-effort.** `obj.method()` resolves when `obj`'s type is
   statically declared (constructor properties, typed fields/variables); a local variable with no
   type annotation does not resolve, and is reported as such, never guessed.
+- **No release has been cut yet.** `install.sh` and the release pipeline
+  ([ADR-0026](docs/adr/0026-phase9-global-install-and-daemon.md)) are built and tested, but no
+  `vX.Y.Z` tag has been pushed — `install.sh` currently falls back to the source-build instructions
+  above. Windows isn't supported for `ctx service install` (macOS/Linux only, matching this
+  project's own CI matrix).
 - Full catalog, organized by subsystem: [`docs/MVP.md`](docs/MVP.md).
 
 ## Documentation map

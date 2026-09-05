@@ -1,0 +1,72 @@
+name: Release
+
+# Triggered by pushing a version tag (v0.1.0, v1.2.3, ...) — never on a
+# plain push to main, so cutting a release is always a deliberate,
+# separate act, not a side effect of merging. Builds ctx/ctxd NATIVELY on
+# each target OS (the same macos-latest + ubuntu-latest matrix ci.yml
+# already uses — no Windows, per docs/requirements/phase9-global-install-
+# and-daemon.md's own explicit scoping) rather than cross-compiling from
+# one machine: every language extractor uses tree-sitter via cgo
+# (README's own Prerequisites section), and cgo cross-compilation would
+# need a real per-target C toolchain (Zig-as-cc, a Linux sysroot on the
+# macOS runner, ...) for no benefit over just running on each OS's own
+# native runner, which GitHub Actions already gives this project for free.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # to create the GitHub Release and upload assets
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: make web
+      - run: go build -trimpath -ldflags="-s -w" -o dist/ctx ./cmd/ctx
+      - run: go build -trimpath -ldflags="-s -w" -o dist/ctxd ./cmd/ctxd
+      - run: go build -trimpath -ldflags="-s -w" -o dist/ctxmcp ./cmd/ctxmcp
+      # ctxbench is the benchmark harness, not part of a normal install —
+      # deliberately not packaged here.
+      - name: Package
+        run: |
+          cd dist
+          tar -czf ../cartograph_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz ctx ctxd ctxmcp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cartograph_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: cartograph_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

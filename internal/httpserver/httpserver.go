@@ -27,7 +27,9 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"sort"
 	"strconv"
+	"sync"
 
 	"github.com/deatherick/cartograph/internal/model"
 	"github.com/deatherick/cartograph/internal/opstatus"
@@ -57,16 +59,89 @@ type Project struct {
 	Ops *opstatus.Tracker
 }
 
-// New builds the HTTP handler: the embedded static frontend at "/", and
-// its JSON API under "/api/". projects must be non-empty; the first
-// element is the default project used whenever a request's ?project=
-// is empty or omitted, so a single-project caller (still the common case)
-// never needs to pass it at all. See the package doc for the multi-project
-// query-parameter contract.
-func New(svc *service.Service, projects []Project) http.Handler {
-	if len(projects) == 0 {
-		panic("httpserver: New requires at least one Project")
+// ProjectRegistry is a thread-safe, LIVE list of projects a running ctxd
+// serves — mutable so a project can be added or removed while the server
+// is already handling requests (ADR-0026, closing the "a real `ctxd
+// project add/list` for an already-running daemon" gap docs/MVP.md and
+// docs/requirements/phase9-global-install-and-daemon.md both named). A
+// plain []Project (New's own shape before ADR-0026) would need the whole
+// server rebuilt to reflect a change — every handler here instead reads a
+// fresh Snapshot() per request, cheap at the scale a single local daemon
+// ever serves (a handful of projects, not thousands).
+type ProjectRegistry struct {
+	mu       sync.RWMutex
+	projects []Project
+}
+
+// NewProjectRegistry builds a registry seeded with initial — the set
+// ctxd was told to watch at startup (from its own argv or, with none
+// given, every project in `~/.cartograph/projects.json`, see cmd/ctxd's
+// own doc). Later Set/Remove calls mutate it as projects are added to or
+// removed from a live daemon.
+func NewProjectRegistry(initial []Project) *ProjectRegistry {
+	r := &ProjectRegistry{}
+	r.projects = append([]Project(nil), initial...)
+	sortProjects(r.projects)
+	return r
+}
+
+// Snapshot returns every currently-registered project, sorted by Name for
+// a stable, predictable /api/projects listing and a stable "first project
+// is the default" choice — a copy, safe for the caller to read without
+// holding any lock.
+func (r *ProjectRegistry) Snapshot() []Project {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]Project(nil), r.projects...)
+}
+
+// Set adds p, or replaces the existing entry with the same Name — the
+// same "re-adding points it at a new location" semantics
+// internal/project.Add already uses, kept consistent here.
+func (r *ProjectRegistry) Set(p Project) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, existing := range r.projects {
+		if existing.Name == p.Name {
+			r.projects[i] = p
+			sortProjects(r.projects)
+			return
+		}
 	}
+	r.projects = append(r.projects, p)
+	sortProjects(r.projects)
+}
+
+// Remove unregisters the project named name — a no-op if it wasn't
+// registered, the same "removing something not there still achieves the
+// caller's goal" convention internal/project.Remove uses.
+func (r *ProjectRegistry) Remove(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := r.projects[:0]
+	for _, p := range r.projects {
+		if p.Name != name {
+			out = append(out, p)
+		}
+	}
+	r.projects = out
+}
+
+func sortProjects(projects []Project) {
+	sort.Slice(projects, func(i, j int) bool { return projects[i].Name < projects[j].Name })
+}
+
+// New builds the HTTP handler: the embedded static frontend at "/", and
+// its JSON API under "/api/". registry must never be empty AT THE TIME OF
+// A REQUEST for the no-?project= default to resolve — New itself doesn't
+// enforce that at construction (unlike the old static-slice New, which
+// panicked on an empty projects at startup): a registry that starts empty
+// and gets its first project added moments later via Set is a real,
+// intended shape now (a system-service ctxd started before `ctx project
+// add` has ever been run), not a construction-time error. An actually
+// empty registry at REQUEST time reports a clear 503, not a panic — see
+// resolveProject below.
+func New(svc *service.Service, registry *ProjectRegistry) http.Handler {
 	mux := http.NewServeMux()
 
 	static, err := fs.Sub(webFS, "web")
@@ -79,27 +154,33 @@ func New(svc *service.Service, projects []Project) http.Handler {
 	}
 	mux.Handle("/", http.FileServer(http.FS(static)))
 
-	byName := make(map[string]Project, len(projects))
-	for _, p := range projects {
-		byName[p.Name] = p
-	}
 	// resolveProject picks which registered Project a request means: its
-	// ?project= name if given and known, the sole default (projects[0])
-	// if omitted, or a clear 400 if a name was given but isn't registered
-	// — never a silent fallback to the default in that case, since that
-	// would make a typo look like a query against the wrong project
-	// instead of an obvious error.
+	// ?project= name if given and known, the sole default (the first
+	// project in the current, freshly-read Snapshot — sorted by Name, so
+	// "first" is stable across requests even as projects are added/
+	// removed) if omitted, or a clear 400 if a name was given but isn't
+	// registered — never a silent fallback to the default in that case,
+	// since that would make a typo look like a query against the wrong
+	// project instead of an obvious error. A registry with NO projects at
+	// all (a system-service ctxd started before anything was ever
+	// registered) reports 503, not a panic or an index-out-of-range.
 	resolveProject := func(w http.ResponseWriter, r *http.Request) (Project, bool) {
+		projects := registry.Snapshot()
+		if len(projects) == 0 {
+			http.Error(w, "no projects registered yet — run `ctx project add` or pass one to ctxd directly", http.StatusServiceUnavailable)
+			return Project{}, false
+		}
 		name := r.URL.Query().Get("project")
 		if name == "" {
 			return projects[0], true
 		}
-		p, ok := byName[name]
-		if !ok {
-			http.Error(w, "unknown project "+strconv.Quote(name), http.StatusBadRequest)
-			return Project{}, false
+		for _, p := range projects {
+			if p.Name == name {
+				return p, true
+			}
 		}
-		return p, true
+		http.Error(w, "unknown project "+strconv.Quote(name), http.StatusBadRequest)
+		return Project{}, false
 	}
 
 	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +190,7 @@ func New(svc *service.Service, projects []Project) http.Handler {
 			Root     string `json:"root"`
 			Watching bool   `json:"watching"`
 		}
+		projects := registry.Snapshot()
 		out := make([]projectSummary, len(projects))
 		for i, p := range projects {
 			s := projectSummary{Name: p.Name, Repo: p.Repo, Root: p.Root}

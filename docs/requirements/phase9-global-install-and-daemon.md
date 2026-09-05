@@ -131,10 +131,18 @@ implementation choice, now made concrete instead of an open blank.
 
 ## Status
 
-Requirement captured 2026-08-29; reviewed and refined 2026-09-05 at the user's explicit request
-(Go, C#, and Python extraction — Phase 3a/3b/3c — and the Similarity Engine's identifier
-normalization — ADR-0025 — landed in between). Tracked in `docs/MVP.md`'s deferred list under
-Phase 9. **Still not started** — every cross-reference added in this review points at code that
-already exists for other reasons (ADR-0016, ADR-0019, ADR-0018), not at anything built for Phase 9
-itself; nothing in this document has been implemented, and per the user's own standing instruction
-it stays that way until asked for again, explicitly, a third time.
+Requirement captured 2026-08-29; reviewed and refined 2026-09-05 (Go, C#, and Python extraction —
+Phase 3a/3b/3c — and the Similarity Engine's identifier normalization — ADR-0025 — landed in
+between); **built the same day, at the user's own explicit follow-up request** ("hagamos la fase 9
+de una vez y cerremos el tema y las preguntas abiertas") after the review pass above had already
+confirmed it should stay documentation-only for the moment. See **ADR-0026** for the full
+implementation record: both concrete shapes this document named for "how `ctx init` and the
+daemon connect" were resolved (polling `projects.json` was chosen over a write-capable HTTP
+endpoint); `ctx service install/uninstall/status` (`internal/sysservice`) implements "daemon as a
+system-level service" for macOS (`launchd`) and Linux (`systemd --user`); `install.sh` +
+`.github/workflows/release.yml` implement "global install." Two things remain deliberately
+undone without a further, separate go-ahead from the user: actually pushing a `vX.Y.Z` release tag
+(the requirements above are built and tested, but no real release has been cut), and actually
+running `ctx service install` on a live machine (every code path is unit-tested with a fake
+command runner, but a live launchd/systemd registration is a real, persistent system change this
+ADR's author did not take unilaterally) — see ADR-0026's own "what still needs a human decision."

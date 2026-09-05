@@ -32,7 +32,7 @@ func setup(t *testing.T) *httptest.Server {
 	if _, err := svc.Index(t.Context(), root, repo); err != nil {
 		t.Fatalf("Index: %v", err)
 	}
-	return httptest.NewServer(New(svc, []Project{{Name: repo, Repo: repo, Root: root}}))
+	return httptest.NewServer(New(svc, NewProjectRegistry([]Project{{Name: repo, Repo: repo, Root: root}})))
 }
 
 func TestHTTPServer_Stats(t *testing.T) {
@@ -243,7 +243,7 @@ func TestHTTPServer_Operations_WithTracker_ReportsStatus(t *testing.T) {
 	ops.SetWatching(true)
 	ops.RecordReindexSuccess("initial index", stats)
 
-	srv := httptest.NewServer(New(svc, []Project{{Name: repo, Repo: repo, Root: root, Ops: ops}}))
+	srv := httptest.NewServer(New(svc, NewProjectRegistry([]Project{{Name: repo, Repo: repo, Root: root, Ops: ops}})))
 	defer srv.Close()
 
 	res, err := http.Get(srv.URL + "/api/operations")
@@ -276,7 +276,7 @@ func TestHTTPServer_MissingIndex_ReturnsClearError(t *testing.T) {
 	root := t.TempDir()
 	svc := service.New()
 	repo := service.RepoName(root)
-	srv := httptest.NewServer(New(svc, []Project{{Name: repo, Repo: repo, Root: root}}))
+	srv := httptest.NewServer(New(svc, NewProjectRegistry([]Project{{Name: repo, Repo: repo, Root: root}})))
 	defer srv.Close()
 
 	res, err := http.Get(srv.URL + "/api/stats")
@@ -320,10 +320,10 @@ func setupTwoProjects(t *testing.T) (*httptest.Server, string, string) {
 
 	opsA := opstatus.New()
 	opsA.SetWatching(true)
-	srv := httptest.NewServer(New(svc, []Project{
+	srv := httptest.NewServer(New(svc, NewProjectRegistry([]Project{
 		{Name: "a", Repo: repoA, Root: rootA, Ops: opsA},
 		{Name: "b", Repo: repoB, Root: rootB}, // no Ops — 404 on /api/operations?project=b
-	}))
+	})))
 	return srv, "a", "b"
 }
 
@@ -435,11 +435,62 @@ func TestHTTPServer_MultiProject_OperationsIsPerProject(t *testing.T) {
 	}
 }
 
-func TestHTTPServer_New_PanicsWithNoProjects(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected New to panic when given an empty []Project")
-		}
-	}()
-	New(service.New(), nil)
+// TestHTTPServer_EmptyRegistry_ReportsServiceUnavailable replaces what was
+// TestHTTPServer_New_PanicsWithNoProjects before ADR-0026: a ProjectRegistry
+// starting empty (a system-service ctxd started before `ctx project add`
+// has ever registered anything, or before any project was added to a live
+// daemon) is now a real, intended shape, not a construction-time error —
+// see New's own doc. A request against it gets a clear 503, never a panic
+// or an index-out-of-range.
+func TestHTTPServer_EmptyRegistry_ReportsServiceUnavailable(t *testing.T) {
+	srv := httptest.NewServer(New(service.New(), NewProjectRegistry(nil)))
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("got status %d, want 503 for an empty project registry", res.StatusCode)
+	}
+}
+
+// TestHTTPServer_ProjectRegistry_SetAddsAProjectLive verifies the core
+// ADR-0026 behavior: a project added to the registry AFTER New has
+// already started serving requests is immediately visible, with no
+// server restart — this is the whole point of ProjectRegistry existing
+// instead of a plain []Project.
+func TestHTTPServer_ProjectRegistry_SetAddsAProjectLive(t *testing.T) {
+	reg := NewProjectRegistry(nil)
+	srv := httptest.NewServer(New(service.New(), reg))
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before []struct{ Name string }
+	if err := json.NewDecoder(res.Body).Decode(&before); err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if len(before) != 0 {
+		t.Fatalf("expected an empty registry to list zero projects, got %+v", before)
+	}
+
+	reg.Set(Project{Name: "added-live", Repo: "added-live", Root: "/tmp/added-live"})
+
+	res2, err := http.Get(srv.URL + "/api/projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res2.Body.Close() }()
+	var after []struct{ Name string }
+	if err := json.NewDecoder(res2.Body).Decode(&after); err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || after[0].Name != "added-live" {
+		t.Fatalf("expected the newly-Set project to appear immediately, got %+v", after)
+	}
 }
