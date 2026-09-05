@@ -13,27 +13,33 @@
 // still the common case — never has to pass it). /api/projects lists what
 // is available, for a frontend project switcher to populate itself with.
 //
-// Duplicates and Impact-by-entity-name views from the original
-// requirements capture are also deferred — they depend on Phase 4 (impact
-// analysis, since done) and Phase 5 (similarity engine, not yet); this
-// only serves what internal/service can already answer: Overview, Search,
-// Entity Inspector, and a bounded Graph view scoped to one entity's
-// neighborhood (never the whole repo at once — a hundreds-of-nodes force
-// layout is neither useful nor fast).
+// /api/duplicates, /api/similar, and /api/decide (a Web UI Duplicates
+// view, closing docs/MVP.md's own "data exists since ADR-0021, but no UI
+// panel reads it yet" gap) serve what internal/service's
+// Duplicates/Similar/Decide already answer — the same Phase 5 similarity
+// engine `ctx duplicates`/`similar`/`decide` use. Everything else here
+// (Overview, Search, Entity Inspector, a bounded Graph view scoped to one
+// entity's neighborhood — never the whole repo at once, a hundreds-of-
+// nodes force layout is neither useful nor fast) predates that.
 package httpserver
 
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
+	"path"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/deatherick/cartograph/internal/model"
 	"github.com/deatherick/cartograph/internal/opstatus"
 	"github.com/deatherick/cartograph/internal/service"
+	"github.com/deatherick/cartograph/internal/similar"
 )
 
 //go:embed web
@@ -152,7 +158,7 @@ func New(svc *service.Service, registry *ProjectRegistry) http.Handler {
 		// embedded query: panic loudly at startup, not per-request.
 		panic("httpserver: embedding web assets: " + err.Error())
 	}
-	mux.Handle("/", http.FileServer(http.FS(static)))
+	mux.Handle("/", spaFallback(static))
 
 	// resolveProject picks which registered Project a request means: its
 	// ?project= name if given and known, the sole default (the first
@@ -351,6 +357,87 @@ func New(svc *service.Service, registry *ProjectRegistry) http.Handler {
 		}{Entity: entity, Source: src})
 	})
 
+	// /api/duplicates and /api/similar are the Web UI's Duplicates view
+	// (docs/MVP.md's own "Duplicates view — its data now exists (ADR-0021),
+	// but no UI panel reads it yet" gap, closed here) — the same
+	// `service.Duplicates`/`service.Similar` the CLI's `ctx
+	// duplicates`/`ctx similar` already call, so behavior never diverges
+	// between the two interfaces (this package's own standing rule).
+	mux.HandleFunc("/api/duplicates", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
+		threshold := 0.0
+		if v := r.URL.Query().Get("threshold"); v != "" {
+			if f, perr := strconv.ParseFloat(v, 64); perr == nil {
+				threshold = f
+			}
+		}
+		pairs, err := svc.Duplicates(p.Root, p.Repo, threshold)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, pairs)
+	})
+
+	mux.HandleFunc("/api/similar", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "missing ?name=", http.StatusBadRequest)
+			return
+		}
+		pairs, match, err := svc.Similar(p.Root, p.Repo, name, r.URL.Query().Get("file"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, struct {
+			Match model.Entity               `json:"match"`
+			Pairs []service.PairWithEntities `json:"pairs"`
+		}{Match: match, Pairs: pairs})
+	})
+
+	// /api/decide is this server's first (and so far only) mutating
+	// endpoint — POST, not GET, deliberately: every other handler above
+	// only ever reads the snapshot, but recording a human's decision on a
+	// pair (never resurface it via Duplicates/Similar again) is a real
+	// state change, and a GET a browser/proxy might prefetch or cache
+	// must never carry that risk.
+	mux.HandleFunc("/api/decide", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed — use POST", http.StatusMethodNotAllowed)
+			return
+		}
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
+		q := r.URL.Query()
+		nameA, nameB := q.Get("nameA"), q.Get("nameB")
+		if nameA == "" || nameB == "" {
+			http.Error(w, "missing ?nameA=/&nameB=", http.StatusBadRequest)
+			return
+		}
+		decision, ok := similar.ParseDecision(q.Get("decision"))
+		if !ok {
+			http.Error(w, fmt.Sprintf("invalid ?decision= — must be one of: %s", similar.ValidDecisions()), http.StatusBadRequest)
+			return
+		}
+		if err := svc.Decide(p.Root, p.Repo, nameA, q.Get("fileA"), nameB, q.Get("fileB"), decision); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, struct {
+			OK bool `json:"ok"`
+		}{OK: true})
+	})
+
 	mux.HandleFunc("/api/operations", func(w http.ResponseWriter, r *http.Request) {
 		p, ok := resolveProject(w, r)
 		if !ok {
@@ -364,6 +451,54 @@ func New(svc *service.Service, registry *ProjectRegistry) http.Handler {
 	})
 
 	return mux
+}
+
+// spaFallback wraps an http.FileServer over the embedded React build so a
+// direct request for a CLIENT-SIDE route (react-router's /graph, /impact,
+// /duplicates — anything the browser's own history/URL bar names, not a
+// link the SPA itself navigated to) serves index.html instead of a bare
+// 404. A plain http.FileServer only knows about real files in the
+// embedded fs — it has no idea /duplicates is a route react-router
+// resolves client-side, not a path on disk. Found live, not in a code
+// review: opening http://127.0.0.1:7420/duplicates directly (a fresh
+// page load, exactly what a bookmark or a page refresh does) 404'd, and
+// so did the PRE-EXISTING /graph and /impact routes — this was already a
+// real bug before this ADR's Duplicates page existed, just never
+// surfaced because every route was always reached by first loading `/`
+// and clicking through, never by a fresh load.
+//
+// A request whose path has a file extension (`.js`, `.css`, an image, ...)
+// is assumed to be a real static asset and gets the file server's own
+// 404 if it's genuinely missing — only an extension-less path (a route)
+// falls back to index.html, so a typo'd asset URL still fails loudly
+// instead of silently serving the SPA shell.
+func spaFallback(fsys fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(fsys))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p == "" {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		if _, err := fs.Stat(fsys, p); err == nil {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		if strings.Contains(path.Base(p), ".") {
+			// Looks like a real asset request (has a file extension) that
+			// genuinely doesn't exist — a real 404, not a client route.
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		index, err := fsys.Open("index.html")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer func() { _ = index.Close() }()
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.Copy(w, index)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

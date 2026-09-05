@@ -19,11 +19,11 @@ MVP scope** (blocks shipping), **explicitly deferred** (documented, not silently
 | 3b — C# extractor | ✅ Done (ADR-0023) — 0.0% bug_rate on a real repo (eShopOnWeb, 254 files) |
 | 3c — Python extractor | ✅ Done (ADR-0024) — 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files); real-repo ctxbench passes the exit criterion (88.9% reduction, 0.86 recall) |
 | 3d — Daemon watcher (V0: full reindex on change, not per-file incremental) | ✅ Done (ADR-0012) — `internal/watch` + real `cmd/ctxd`, verified end-to-end |
-| 6 — Web UI: integrated Overview (table+detail+graph+impact tabs), navigable graph, git-diff impact | ✅ Done (ADR-0013/0015) — served by `ctxd --web`, React+Vite (reversed from V0's no-build choice) |
+| 6 — Web UI: integrated Overview (table+detail+graph+impact+duplicates tabs), navigable graph, git-diff impact | ✅ Done (ADR-0013/0015/0027) — served by `ctxd --web`, React+Vite (reversed from V0's no-build choice) |
 | 4 — Impact analysis (`ctx impact`, git-diff-driven blast radius) | ✅ Done (ADR-0014) — unblocks the Web UI's Impact view |
-| 5 — Duplicate/similarity engine V0 + identifier normalization | ✅ Done (ADR-0021/ADR-0025) — 1.00 precision / 0.83 recall on the 24-pair labeled eval; AST tree-edit distance and a ≥120-pair eval set remain open |
+| 5 — Duplicate/similarity engine V0 + identifier normalization + Web UI view | ✅ Done (ADR-0021/ADR-0025/ADR-0027) — 1.00 precision / 0.83 recall on the 24-pair labeled eval; AST tree-edit distance and a ≥120-pair eval set remain open |
 | 7-8 — Cross-repo, learned relationships, AI | ⬜ Post-MVP |
-| 9 — Hardening, installer, distribution | ✅ Done (ADR-0026) — see the deferred-list entry below for what still needs the user's own go-ahead (cutting a release, running the installer live) |
+| 9 — Hardening, installer, distribution | ✅ Done (ADR-0026), **fully live-verified**: real `v0.1.0` release, real `install.sh` download, real `ctx service install` running as a system service with real registered projects |
 
 ## What "MVP" means for this project
 
@@ -303,15 +303,22 @@ Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files
   full ask: no L2 bounded AST tree-edit distance (token-shingle Jaccard stands in), and the labeled
   eval set is 24 pairs, not the master plan's ≥120 — but renamed-identifier normalization (ADR-0021's
   originally-named gap) is now closed: measured precision 1.00 / recall **0.83** (up from 0.50) on
-  that same 24-pair set, reported plainly. The duplicate-decision UI concept (a Web UI panel) remains
-  not built — see the Web UI item below.
+  that same 24-pair set, reported plainly. ~~The duplicate-decision UI panel~~ is **done, ADR-0027**
+  — see the Web UI item below.
 - **Web UI beyond ADR-0013/0015/0019's scope** — entity classification/tagging, pattern
-  identification as a first-class surface, filtering as a cross-cutting primitive, a Duplicates
-  view (its data now exists, ADR-0021, but no UI panel reads it yet), and a Projects/Settings
-  management page (add/remove a project from the
-  UI itself — today only the switcher exists; adding one still means `ctx project add` + restarting
-  `ctxd`). Multi-project watching and live updates on reindex are now done (ADR-0019, polling-based,
-  not push-based). Full remaining ask in `docs/requirements/phase6-web-ui.md`.
+  identification as a first-class surface, filtering as a cross-cutting primitive, and a
+  Projects/Settings management page (add/remove a project from the UI itself — today only the
+  switcher exists; adding a project no longer needs restarting `ctxd` since ADR-0026's zero-argument
+  daemon mode, but there's still no UI button for it, only `ctx project add`). ~~A Duplicates
+  view~~ is **done, ADR-0027**: `/duplicates`, every score fully decomposed
+  (Exact/Structural/Behavioral/Overall, never one opaque number), a decision recorded from the
+  browser via the same `internal/service.Decide` the CLI calls — a pair decided from either never
+  resurfaces in the other. Found and fixed a real, pre-existing bug along the way: every
+  client-side route (`/graph`, `/impact`, and now `/duplicates`) 404'd on a direct page load —
+  only ever masked because every route was previously reached by clicking through from `/`, never
+  a fresh load or a bookmark. Multi-project watching and live updates on reindex are now done
+  (ADR-0019, polling-based, not push-based). Full remaining ask in
+  `docs/requirements/phase6-web-ui.md`.
 - **Grafel-parity UI surfaces evaluated and explicitly not pursued** — Topology/Links (need
   multi-repo, Phase 7/9), Security/Taint/Dependency-Injection/Error-flow/Infrastructure/GraphQL
   (entire analysis domains never in this project's own scope — Grafel's, not Cartograph's, per
@@ -506,6 +513,26 @@ This closes every item in the weighted "easy win" batch (Paths, Quality, Operati
     followed rather than rediscovered. `install.sh` + `.github/workflows/release.yml` are real,
     tested live against this repo. **Same day, at a separate explicit follow-up request, `v0.1.0`
     was tagged and released** — `install.sh` verified live end-to-end against the real published
-    release (downloaded `cartograph_darwin_arm64.tar.gz`, extracted, ran `ctx` for real). One thing
-    deliberately NOT done without the user's own separate go-ahead: running `ctx service install`
-    for real on a live machine (registers a real, persistent background service) — see ADR-0026.
+    release (downloaded `cartograph_darwin_arm64.tar.gz`, extracted, ran `ctx` for real). **Then, at
+    a further explicit go-ahead, `ctx service install` was run for real** on the maintainer's own
+    machine: `ctxd` is a real, running `launchd` agent (verified via `ctx service status`), with
+    five real projects registered (this repo itself, plus four fixtures) — one of them
+    (`similarity-eval`) was registered WHILE the service was already running and picked up live,
+    via ADR-0026's own reconciliation, with no restart. Every "what still needs a human decision"
+    item from ADR-0026 is now closed.
+24. ~~Web UI: Duplicates view~~ — done, ADR-0027, picked by the user after weighing it against
+    closing C#'s Context Compiler recall gap and hardening the watcher. `/api/duplicates`,
+    `/api/similar`, `/api/decide` (`internal/httpserver`) are thin adapters over the exact same
+    `internal/service.Duplicates/Similar/Decide` the CLI already used — no logic duplicated;
+    `/duplicates` (`web/src/pages/DuplicatesPage.tsx`) renders every pair with its full score
+    breakdown and a decision control, polling every 5s. A real, PRE-EXISTING bug was found and
+    fixed along the way, unrelated to the new page itself: every client-side route (`/graph`,
+    `/impact`, and now `/duplicates`) 404'd on a direct page load or refresh — `http.FileServer`
+    had no concept of a react-router client route; fixed with a standard SPA-fallback wrapper
+    (`spaFallback`), regression-tested against all three routes. Verified live against the real
+    running system-service `ctxd` from item 23 (not just a test fixture): a real screenshot of
+    `/duplicates?project=cartograph` showed genuine, previously-invisible self-hosting
+    duplication (`text()`/`anchorFrom()` helpers copy-pasted near-identically across all four
+    language extractors), and clicking "Record" in the browser persisted a real decision to
+    `~/.cartograph/cartograph-<hash>/duplicate-decisions.json` — confirmed by reading that file
+    afterward, not assumed from the UI alone.

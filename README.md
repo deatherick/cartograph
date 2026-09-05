@@ -233,12 +233,15 @@ shows **Detail** (fan-in/fan-out, source view), **Graph** (a navigable graph of 
 neighborhood — click any node to make it the new center, or switch to a **Tree** view of the same
 relationships as an indented text list), and **Impact** (blast radius, no search step needed) as
 tabs in the same panel. A separate `/graph` and `/impact` route cover free-form exploration and
-git-diff-driven impact analysis. Built with React + Vite + Tailwind (`web/`, compiled by
-`make web` into `internal/httpserver/web/` for `go:embed` — see
+git-diff-driven impact analysis, and **`/duplicates`** (every undecided similarity/duplicate
+candidate the engine found — Exact/Structural/Behavioral/Overall always shown separately, never
+collapsed to one score — with a decision recorded right from the browser via the same
+`internal/service.Decide` the CLI's `ctx decide` calls; see
+[ADR-0027](docs/adr/0027-web-ui-duplicates-view.md)). Built with React + Vite + Tailwind (`web/`,
+compiled by `make web` into `internal/httpserver/web/` for `go:embed` — see
 [ADR-0015](docs/adr/0015-react-web-ui.md) for why this reversed ADR-0013's original no-Node
 choice, and for the real UI code reused from Grafel's own dashboard, MIT-licensed and explicitly
-authorized for this layer — see [`NOTICE.md`](NOTICE.md)). A Duplicates view isn't built yet — it
-needs Phase 5 (the similarity engine), which doesn't exist.
+authorized for this layer — see [`NOTICE.md`](NOTICE.md)).
 
 ## Using it from a coding agent (MCP)
 

@@ -75,6 +75,41 @@ export interface Stats {
   byKind: Record<string, number>
 }
 
+// Pair mirrors internal/similar.Pair — every score fully decomposed,
+// never a single opaque number (ADR-0021's own standing rule; the UI
+// below shows every field, not just Overall).
+export interface Pair {
+  A: string
+  B: string
+  Exact: boolean
+  Structural: number
+  Behavioral: number
+  Overall: number
+}
+
+// PairWithEntities mirrors internal/service.PairWithEntities — a Pair
+// plus both entities it names, resolved once server-side so the UI never
+// needs a second lookup per pair.
+export interface PairWithEntities {
+  Pair: Pair
+  A: Entity
+  B: Entity
+}
+
+// Decision mirrors internal/similar.Decision's five valid values
+// (similar.ValidDecisions()) — kept as a literal union, not a bare
+// string, so an invalid value is a compile-time error in the UI, not
+// just a 400 from /api/decide.
+export type Decision = 'ignore' | 'intentional' | 'same-pattern' | 'should-share-abstraction' | 'false-positive'
+
+export const DECISIONS: { value: Decision; label: string }[] = [
+  { value: 'same-pattern', label: 'Same pattern (expected)' },
+  { value: 'should-share-abstraction', label: 'Should share an abstraction' },
+  { value: 'intentional', label: 'Intentional duplication' },
+  { value: 'false-positive', label: 'False positive' },
+  { value: 'ignore', label: 'Ignore' },
+]
+
 // Project is one entry from /api/projects — the daemon-side multi-project
 // list (ADR-0019). watching reflects that project's opstatus.Tracker, if
 // it has one (a project ctxd is only indexing, never watching, always
@@ -107,6 +142,18 @@ async function getJSON<T>(path: string): Promise<T> {
     throw new Error((data as { error?: string }).error ?? res.statusText)
   }
   return data as T
+}
+
+// postJSON is only used by /api/decide today — this server's one
+// mutating endpoint (see internal/httpserver's own doc on why that one
+// is POST while everything else is a GET). A non-2xx response's body is
+// plain text (http.Error), not JSON, unlike getJSON's error path.
+async function postJSON<T>(path: string): Promise<T> {
+  const res = await fetch(path, { method: 'POST' })
+  if (!res.ok) {
+    throw new Error((await res.text()) || res.statusText)
+  }
+  return (await res.json()) as T
 }
 
 // withProject appends ?project=<name> (or &project=<name> if the path
@@ -151,5 +198,19 @@ export const api = {
   source: (project: string, name: string, file = '') =>
     getJSON<{ entity: Entity; source: string }>(
       withProject(`/api/source?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`, project),
+    ),
+  duplicates: (project: string, threshold = 0) =>
+    getJSON<PairWithEntities[]>(withProject(`/api/duplicates?threshold=${threshold}`, project)),
+  similar: (project: string, name: string, file = '') =>
+    getJSON<{ match: Entity; pairs: PairWithEntities[] }>(
+      withProject(`/api/similar?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`, project),
+    ),
+  decide: (project: string, nameA: string, fileA: string, nameB: string, fileB: string, decision: Decision) =>
+    postJSON<{ ok: boolean }>(
+      withProject(
+        `/api/decide?nameA=${encodeURIComponent(nameA)}&fileA=${encodeURIComponent(fileA)}` +
+          `&nameB=${encodeURIComponent(nameB)}&fileB=${encodeURIComponent(fileB)}&decision=${decision}`,
+        project,
+      ),
     ),
 }
