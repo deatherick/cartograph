@@ -100,6 +100,21 @@
   right: (call
     function: (identifier) @receiver.fieldtype)) @receiver.field
 
+; `self.attr = some_parameter` — assigning a constructor's own parameter
+; directly (arguably more idiomatic than re-instantiating via
+; `self.attr = SomeClass(...)` above), previously a documented gap: this
+; gave NO receiver-type signal at all. Captured generically (any bare
+; identifier on the right, not just a parameter); the Go side
+; cross-references @receiver.fieldvalue against the SAME enclosing
+; function's own typed parameters (a present PEP 484 hint) via
+; paramTypesByFunc — silently produces no signal when there's no such
+; hint, never a guess.
+(assignment
+  left: (attribute
+    object: (identifier) @receiver.selfobjectparam
+    attribute: (identifier) @receiver.fieldnameparam)
+  right: (identifier) @receiver.fieldvalueparam) @receiver.fieldfromparam
+
 ; A locally typed variable via a PEP 484 annotation: `repo: UserRepository = ...`.
 ; Real, deterministic type information when present — rare in this
 ; project's own real-repo validation target (a pre-type-hints-era Django

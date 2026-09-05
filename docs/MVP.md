@@ -226,10 +226,13 @@ Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files
 - No three-level unaliased namespace chain (`import x.y.z` then `x.y.z.member()`) — Python binds
   only the top segment; the chain past that isn't chased, the same bounded scope C#'s
   `Guard.Against.Null` gap already accepts.
-- `self.field = some_parameter` (assigning a constructor's own parameter directly, arguably more
-  idiomatic than re-instantiating in `__init__`) gives no receiver-type signal — only
-  `self.field = SomeClass(...)` does. A present PEP 484 type hint on the parameter is captured but
-  not yet cross-referenced back into this path.
+- ~~`self.field = some_parameter` ... gives no receiver-type signal~~ **closed**: a new query
+  pattern (`receiver.fieldfromparam`) captures the assignment; the Go side cross-references the
+  assigned identifier against the SAME enclosing function's own typed parameters
+  (`paramTypesByFunc`, keyed by function start byte so two different methods' same-named
+  parameter never collide) — silently produces no signal when the parameter has no PEP 484 hint,
+  never guessed from its bare name. Verified unchanged (0.0% bug_rate, 0.86 recall) against
+  django-realworld-example-app.
 - Decorators that rename or replace their target at runtime (`functools.wraps`-based wrappers,
   Django's `@receiver`) are undetectable via syntax alone — a permanent gap in the same category
   as Go's implicit interface satisfaction.
