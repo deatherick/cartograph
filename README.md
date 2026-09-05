@@ -8,19 +8,19 @@ alike. The idea: `grep` → read file → `grep` → read 8 more files → guess
 discover the duplicate later becomes graph → ranked context capsule → 2-3 targeted reads →
 grep to verify.
 
-**Status**: MVP shipped (Phase 2), plus Go support (Phase 3a), a plug-and-play language
-architecture (Phase 3a′), a daemon watcher (Phase 3d V0), impact analysis (Phase 4), and a
-React-based web UI (Phase 6) — TypeScript and Go extraction/resolution, the Context Compiler, an
-MCP server, `ctxd` (index once, then watch and re-index on change), `ctx impact`/git-diff blast
-radius, and a browser UI (an integrated Overview with a searchable/filterable entity table, a
-navigable graph + tree view, and impact analysis, all in one workspace — see
-[ADR-0015](docs/adr/0015-react-web-ui.md)) are all built, tested, and measured against both a
-real coding agent (ADR-0009) and this project's own real source (ADR-0010: 0.1% bug_rate
-self-hosting). See [`docs/MVP.md`](docs/MVP.md) for the full picture and
-[`docs/adr/`](docs/adr/) for how every decision was made. Functional via CLI, MCP, and a browser
-today. C#/Python extraction, true per-file incremental indexing, the similarity/duplicate engine,
-and global system-level install are still ahead — see the
-[known limitations](#known-limitations) below.
+**Status**: MVP shipped (Phase 2), plus Go (Phase 3a) and C# (Phase 3b) support, a plug-and-play
+language architecture (Phase 3a′), true per-file incremental indexing (Phase 3d), impact analysis
+(Phase 4), a similarity/duplicate engine V0 (Phase 5), and a React-based web UI (Phase 6) —
+TypeScript, Go, and C# extraction/resolution, the Context Compiler, an MCP server, `ctxd` (indexes
+once, then watches and incrementally re-indexes on change), `ctx impact`/git-diff blast radius,
+`ctx duplicates`/`similar`/`decide`, and a browser UI (an integrated Overview with a
+searchable/filterable entity table, a navigable graph + tree view, and impact analysis, all in one
+workspace — see [ADR-0015](docs/adr/0015-react-web-ui.md)) are all built, tested, and measured
+against both a real coding agent (ADR-0009) and this project's own real source (ADR-0010: 0.1%
+bug_rate self-hosting; ADR-0023: 0.0% bug_rate on a real C# repo). See
+[`docs/MVP.md`](docs/MVP.md) for the full picture and [`docs/adr/`](docs/adr/) for how every
+decision was made. Functional via CLI, MCP, and a browser today. Python extraction and global
+system-level install are still ahead — see the [known limitations](#known-limitations) below.
 
 ## Prerequisites
 
@@ -79,8 +79,8 @@ Class      src/services/userService.ts#UserService  src/services/userService.ts:
 Test       tests/userService.test.ts#UserService    tests/userService.test.ts:5-29
 ```
 
-Now point it at a real repo instead — TypeScript, Go, or a mix of both in the same repo, same
-commands either way (a Java Spring service and its TypeScript frontend, a Go backend with a React
+Now point it at a real repo instead — TypeScript, Go, C#, or a mix in the same repo, same
+commands either way (an ASP.NET Core backend with a React frontend, a Go backend with a React
 UI — one index, one graph, one `context` capsule spanning both):
 
 ```bash
@@ -229,7 +229,13 @@ agent actually used it (a real bug was found and fixed).
 
 The honest list, kept current in [`docs/MVP.md`](docs/MVP.md#consolidated-known-issues-not-blocking-mvp-but-should-not-be-forgotten):
 
-- **TypeScript/JavaScript and Go.** C# and Python are designed for but not built yet (Phase 3b/3c).
+- **TypeScript/JavaScript, Go, and C#.** Python is designed for but not built yet (Phase 3c).
+  C# resolves qualified calls only from a real, statically-declared type (constructor-injected
+  field/property, typed parameter/local, `var x = new Foo()`) — never guessed from
+  capitalization — and maps a `using` directive to a directory only on an exact namespace match
+  against a `.csproj`'s root namespace, never a partial/suffix match; both are deliberate,
+  user-requested guards against a false resolution, not oversights
+  ([ADR-0023](docs/adr/0023-csharp-extractor.md)).
 - **Go's implicit interface satisfaction (no `implements` keyword) cannot be detected** — needs
   real type-checking, not tree-sitter queries; a permanent gap, not a missing feature
   ([ADR-0010](docs/adr/0010-go-extractor-and-self-hosting.md)).

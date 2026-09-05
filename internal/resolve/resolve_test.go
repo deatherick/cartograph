@@ -23,7 +23,7 @@ func TestArchitectureBoundary_CoreNeverBranchesOnLang(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading resolve.go: %v", err)
 	}
-	for _, needle := range []string{"model.LangTS", "model.LangGo"} {
+	for _, needle := range []string{"model.LangTS", "model.LangGo", "model.LangCSharp"} {
 		if strings.Contains(string(content), needle) {
 			t.Errorf("resolve.go (the core pipeline) mentions %q directly — per-language logic belongs in a lang_*.go file, reached only through LanguagePolicy", needle)
 		}

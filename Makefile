@@ -1,4 +1,4 @@
-.PHONY: build web test lint bench bench-real clean
+.PHONY: build web test lint bench bench-real bench-real-csharp clean
 
 # web builds the React frontend (web/) and copies its output into
 # internal/httpserver/web/ — the directory internal/httpserver.go embeds
@@ -36,6 +36,16 @@ bench-real: build
 		https://github.com/skopekreep/typescript-node-express-realworld-example-app \
 		~/code/_ref/realworld-ts
 	./bin/ctxbench --baseline --capsule --budget 2500 --fixtures-root ~/code/_ref --tasks fixtures/tasks/realworld-ts.json
+
+# bench-real-csharp is bench-real's C# counterpart (ADR-0023, Phase 3b):
+# same real-repo-not-vendored methodology, a different language and a
+# different real external repo (eShopOnWeb, Microsoft's own ASP.NET Core
+# reference app).
+bench-real-csharp: build
+	@[ -d ~/code/_ref/eShopOnWeb ] || git clone --depth 1 \
+		https://github.com/dotnet-architecture/eShopOnWeb \
+		~/code/_ref/eShopOnWeb
+	./bin/ctxbench --baseline --capsule --budget 2500 --fixtures-root ~/code/_ref --tasks fixtures/tasks/eshoponweb.json
 
 clean:
 	rm -rf bin/

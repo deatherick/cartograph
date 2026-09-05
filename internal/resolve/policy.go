@@ -101,3 +101,28 @@ var goKnownPackages = map[string]bool{
 	"github.com/modelcontextprotocol/go-sdk/mcp": true,
 	"github.com/pkoukk/tiktoken-go":              true,
 }
+
+// csBuiltins is a starter list of C# identifiers that are never a repo
+// entity — deliberately small, since this extractor's query patterns
+// only capture (identifier) nodes as call/receiver targets, and most of
+// C#'s actual keyword-level builtins (int, string, void, var, ...) are
+// separate `predefined_type`/keyword tokens the grammar never surfaces as
+// an `identifier`, so they can never reach a bare-name ref in the first
+// place — unlike Go/TS, where a predeclared name IS an ordinary
+// identifier. Grows as real repos surface more (ADR-0023), same
+// discipline as goBuiltins/knownGlobals above.
+var csBuiltins = map[string]bool{
+	"nameof": true, "typeof": true, "default": true,
+}
+
+// csKnownNamespaces is a starter allowlist of well-known NuGet package
+// namespace roots (first dotted segment), mirroring goKnownPackages for
+// Go above — checked only after "System"/"Microsoft" (see
+// lang_csharp.go's externalDisposition), which already cover the .NET
+// BCL and first-party ASP.NET Core namespaces without needing an entry
+// here. Starter list only — grows as real repos surface more.
+var csKnownNamespaces = map[string]bool{
+	"Ardalis": true, "Autofac": true, "AutoMapper": true, "MediatR": true,
+	"Newtonsoft": true, "Xunit": true, "Moq": true, "FluentAssertions": true,
+	"NSubstitute": true, "Serilog": true, "Blazored": true,
+}

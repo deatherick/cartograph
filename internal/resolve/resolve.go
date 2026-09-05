@@ -83,6 +83,19 @@ type Index struct {
 	// builtins n/a, disposition falls through to DispositionUnclassified)
 	// — see resolveQualified/resolveUnqualified's nil-policy handling.
 	policies map[model.Lang]LanguagePolicy
+	// entityKind maps every registered entity's ID to its Kind — generic,
+	// language-agnostic infra (like filesByDir) used by
+	// reclassifyHeritageEdge below. Added for ADR-0023 (C#): unlike
+	// TypeScript's separate extends_clause/implements_clause grammar nodes
+	// or Go's single embedding relationship, C#'s base_list syntax does not
+	// distinguish "extends a class" from "implements an interface" — both
+	// appear in the same list. Rather than guess from a naming convention
+	// (e.g. "starts with I"), every language's extractor may emit such a
+	// heritage ref as RefExtends by default; once the target actually
+	// resolves, this map lets the resolver check the REAL entity kind and
+	// correct the edge to EdgeImplements if it turns out to be an
+	// interface — deterministic, based on resolved data, never a guess.
+	entityKind map[model.EntityID]model.Kind
 }
 
 // NewIndex creates an empty resolver index for repo, with no languages
@@ -99,6 +112,7 @@ func NewIndex(repo string) *Index {
 		byBareName: map[string][]model.EntityID{},
 		filesByDir: map[string][]string{},
 		policies:   map[model.Lang]LanguagePolicy{},
+		entityKind: map[model.EntityID]model.Kind{},
 	}
 }
 
@@ -153,6 +167,7 @@ func (idx *Index) AddFile(facts *model.FileFacts) {
 		}
 		fe.byName[e.Name] = append(fe.byName[e.Name], e.ID)
 		idx.byBareName[e.Name] = append(idx.byBareName[e.Name], e.ID)
+		idx.entityKind[e.ID] = e.Kind
 
 		if e.Kind != model.KindMethod {
 			continue
@@ -208,6 +223,7 @@ func (idx *Index) RemoveFile(file string) {
 		return
 	}
 	for _, e := range fe.entities {
+		delete(idx.entityKind, e.ID)
 		if e.Kind == model.KindTest {
 			continue // never indexed into byBareName in the first place — see AddFile's doc
 		}
@@ -335,6 +351,7 @@ func (idx *Index) resolveOne(file string, fe *fileEntry, ref model.Ref) model.Re
 		return model.ResolvedRef{Disposition: model.DispositionUnclassified, Reason: fmt.Sprintf("unhandled ref kind %q", ref.Kind)}
 	}
 
+	var result model.ResolvedRef
 	switch ref.Target.Scope {
 	case model.ScopeLocal:
 		// Never cross-resolved by construction — see model.TargetScope's
@@ -342,18 +359,38 @@ func (idx *Index) resolveOne(file string, fe *fileEntry, ref model.Ref) model.Re
 		// variable cross-resolving against an unrelated global). The
 		// Go extractor emits this for closures/callback parameters called
 		// bare (edge-case-backlog.md J2); no extractor emitted it before.
-		return model.ResolvedRef{Disposition: model.DispositionUnclassified, Reason: "scope-local ref, never cross-resolved"}
+		result = model.ResolvedRef{Disposition: model.DispositionUnclassified, Reason: "scope-local ref, never cross-resolved"}
 
 	case model.ScopeQualified:
 		// `obj.member()` / `this.prop.member()`. Only the import-table and
 		// receiver-type tiers are implemented; a receiver whose static type
 		// cannot be determined is the documented receiver-type gap.
-		return idx.resolveQualified(file, fe, ref, edgeKind)
+		result = idx.resolveQualified(file, fe, ref, edgeKind)
 
 	default: // ScopeUnqualified (or ScopeSameFile, treated identically —
 		// no extractor currently distinguishes them; same-file is simply
 		// the first tier tried below regardless of the tag).
-		return idx.resolveUnqualified(file, fe, ref, edgeKind)
+		result = idx.resolveUnqualified(file, fe, ref, edgeKind)
+	}
+
+	idx.reclassifyHeritageEdge(&result)
+	return result
+}
+
+// reclassifyHeritageEdge corrects a resolved EdgeExtends edge to
+// EdgeImplements when the RESOLVED target entity's real Kind turns out to
+// be KindInterface — see entityKind's doc on Index for why this exists
+// (C#'s base_list syntax cannot tell extends from implements at parse
+// time, unlike TypeScript/Go). Deliberately based on the actual resolved
+// entity, never a name-based guess; a no-op for every language whose
+// extractor already distinguishes the two syntactically (TypeScript, Go),
+// since their RefExtends targets are never interfaces in the first place.
+func (idx *Index) reclassifyHeritageEdge(result *model.ResolvedRef) {
+	if result.Disposition != model.DispositionResolved || result.Edge == nil || result.Edge.Kind != model.EdgeExtends {
+		return
+	}
+	if idx.entityKind[result.Edge.Dst] == model.KindInterface {
+		result.Edge.Kind = model.EdgeImplements
 	}
 }
 
