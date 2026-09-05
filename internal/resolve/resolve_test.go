@@ -1074,3 +1074,106 @@ func TestResolve_CSharp_ProjectReference_TransitiveResolution(t *testing.T) {
 		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, target.ID)
 	}
 }
+
+// pyEntity mirrors goEntity/csEntity for Python.
+func pyEntity(kind model.Kind, qualified, name string) model.Entity {
+	const repo = "repo"
+	return model.Entity{
+		ID:        model.NewEntityID(repo, kind, qualified, ""),
+		Kind:      kind,
+		Lang:      model.LangPython,
+		Repo:      repo,
+		Qualified: qualified,
+		Name:      name,
+	}
+}
+
+// pyIndex mirrors goIndex/csIndex for Python.
+func pyIndex() *Index {
+	idx := NewIndex("repo")
+	idx.RegisterPolicy(NewPythonPolicy())
+	return idx
+}
+
+// TestResolve_Python_ReExportThroughInitBarrel closes a documented gap
+// (edge-case-backlog.md E2): `from mypackage import Article` when
+// Article is actually defined in mypackage/models.py and merely imported
+// into mypackage/__init__.py's own namespace (`from .models import
+// Article`, no explicit re-export syntax needed in real Python).
+func TestResolve_Python_ReExportThroughInitBarrel(t *testing.T) {
+	idx := pyIndex()
+
+	articleEnt := pyEntity(model.KindClass, "mypackage/models#Article", "Article")
+	modelsFacts := &model.FileFacts{Lang: model.LangPython, File: "mypackage/models.py", Entities: []model.Entity{articleEnt}}
+
+	initFacts := &model.FileFacts{
+		Lang: model.LangPython,
+		File: "mypackage/__init__.py",
+		Imports: []model.ImportBinding{
+			{LocalName: "Article", Source: ".models", ImportedName: "Article"},
+		},
+	}
+
+	callerFacts := &model.FileFacts{
+		Lang: model.LangPython,
+		File: "app/main.py",
+		Imports: []model.ImportBinding{
+			{LocalName: "Article", Source: "mypackage", ImportedName: "Article"},
+		},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "Article"}},
+		},
+	}
+	idx.AddFile(modelsFacts)
+	idx.AddFile(initFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected the barrel re-export to resolve, got %+v", got)
+	}
+	if got[0].Edge.Dst != articleEnt.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, articleEnt.ID)
+	}
+}
+
+// TestResolve_Python_OrdinaryModule_DoesNotChaseReExports verifies
+// chasing is scoped to __init__.py only — an ordinary module's own
+// imports must NOT be treated as a re-export chain (a narrower scope
+// than real Python namespace semantics technically allow, deliberately,
+// to avoid surfacing an unrelated same-named import as a false resolve).
+func TestResolve_Python_OrdinaryModule_DoesNotChaseReExports(t *testing.T) {
+	idx := pyIndex()
+
+	articleEnt := pyEntity(model.KindClass, "mypackage/models#Article", "Article")
+	modelsFacts := &model.FileFacts{Lang: model.LangPython, File: "mypackage/models.py", Entities: []model.Entity{articleEnt}}
+
+	// An ORDINARY module (not __init__.py) that happens to import Article
+	// for its own use — not a package barrel.
+	helperFacts := &model.FileFacts{
+		Lang: model.LangPython,
+		File: "mypackage/helpers.py",
+		Imports: []model.ImportBinding{
+			{LocalName: "Article", Source: ".models", ImportedName: "Article"},
+		},
+	}
+
+	callerFacts := &model.FileFacts{
+		Lang: model.LangPython,
+		File: "app/main.py",
+		Imports: []model.ImportBinding{
+			{LocalName: "Article", Source: "mypackage.helpers", ImportedName: "Article"},
+		},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "Article"}},
+		},
+	}
+	idx.AddFile(modelsFacts)
+	idx.AddFile(helperFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition == model.DispositionResolved {
+		t.Fatalf("expected an ordinary (non-__init__.py) module's own import to NOT be chased as a re-export, got %+v", got)
+	}
+}

@@ -199,18 +199,57 @@ func (p *pyPolicy) resolveModulePath(idx *Index, fromFile, source string) (targe
 }
 
 // findExportedEntity looks up name as a module-level entity declared
-// directly in file. No re-export chasing (a name only re-exported
-// through an __init__.py barrel is a documented gap, edge-case-backlog.md
-// E2) — the same conservative "don't guess through a chain" default
-// TypeScript's own findExportedEntity uses for barrel re-exports it DOES
-// chase, except Python's version doesn't chase at all yet.
+// directly in file, chasing through an __init__.py barrel's own import
+// table when it isn't — closing a documented gap (edge-case-backlog.md
+// E2): `from mypackage import Name` when Name is actually defined in a
+// submodule and merely imported into mypackage/__init__.py's own
+// namespace. Python has no explicit re-export syntax the way
+// TypeScript's `export * from`/`export {a as b} from` does — ANY name a
+// module imports becomes part of that module's own namespace, so an
+// ordinary `from .models import Name` inside __init__.py genuinely does
+// make `package.Name` resolve in real Python, not merely a convention.
 func (p *pyPolicy) findExportedEntity(idx *Index, file, name string) (model.EntityID, bool) {
+	return p.findExportedEntityDepth(idx, file, name, 0, map[string]bool{})
+}
+
+// maxPyReExportDepth mirrors lang_ts.go's maxReExportDepth (a different
+// constant, not shared — TypeScript's own barrel-chasing is unrelated
+// code, ADR-0011's "no language's file touches another's").
+const maxPyReExportDepth = 4
+
+func (p *pyPolicy) findExportedEntityDepth(idx *Index, file, name string, depth int, visited map[string]bool) (model.EntityID, bool) {
 	target := idx.files[file]
 	if target == nil {
 		return "", false
 	}
 	if ids := target.byName[name]; len(ids) == 1 {
 		return ids[0], true
+	}
+	// Chasing is deliberately scoped to __init__.py barrel files only —
+	// the one real Python convention "re-export awareness" is actually
+	// about. An ordinary module's own imports are real per Python's
+	// namespace semantics too, but chasing through every file
+	// unconditionally would reach far beyond what this gap means in
+	// practice and risk surfacing an unrelated same-named import as a
+	// false resolve.
+	if !strings.HasSuffix(file, "__init__.py") {
+		return "", false
+	}
+	if depth >= maxPyReExportDepth || visited[file] {
+		return "", false
+	}
+	visited[file] = true
+	for _, im := range target.imports {
+		if im.LocalName != name {
+			continue
+		}
+		nextFile, internal, found := p.resolveModulePath(idx, file, im.Source)
+		if !internal || !found {
+			continue
+		}
+		if id, ok := p.findExportedEntityDepth(idx, nextFile, im.ImportedName, depth+1, visited); ok {
+			return id, true
+		}
 	}
 	return "", false
 }

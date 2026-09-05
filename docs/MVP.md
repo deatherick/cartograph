@@ -242,9 +242,16 @@ edges) — these are the documented gaps behind that number, not blockers:
 ### Extraction and resolution (`internal/parser/python`) — ADR-0024
 Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files, 112 entities,
 21 resolved edges) — these are the documented gaps behind that number, not blockers:
-- No re-export awareness — a name only reachable through an `__init__.py` barrel
-  (`from mypackage import Name` when `Name` is actually defined in a submodule and merely
-  re-exported) does not resolve. Real, not observed in the validation target.
+- ~~No re-export awareness~~ **closed**: `findExportedEntity` now chases through an
+  `__init__.py`'s own import table (depth-limited, cycle-safe, mirroring TypeScript's barrel
+  re-export chasing) — Python has no explicit re-export syntax, but an ordinary
+  `from .models import Name` inside `__init__.py` genuinely does put `Name` in that package's own
+  namespace, so this isn't a convention being guessed at, just real Python semantics. Deliberately
+  scoped to `__init__.py` files only, not chased through every ordinary module's own imports
+  (which real Python namespace rules technically also allow) — narrower than the language permits,
+  to avoid surfacing an unrelated same-named import as a false resolve. Verified unchanged (0.0%
+  bug_rate, 21 resolved edges; 0.86 average recall@gold) against django-realworld-example-app —
+  still not exercised by that repo, only unit/resolver-tested.
 - No three-level unaliased namespace chain (`import x.y.z` then `x.y.z.member()`) — Python binds
   only the top segment; the chain past that isn't chased, the same bounded scope C#'s
   `Guard.Against.Null` gap already accepts.
