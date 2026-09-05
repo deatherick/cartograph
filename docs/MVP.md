@@ -221,9 +221,19 @@ edges) — these are the documented gaps behind that number, not blockers:
   capitalization-based guess; a `using` directive only maps to a directory on an EXACT namespace
   match against a known `.csproj`'s root namespace, never a partial/suffix match. Both trade
   recall for zero false-resolution risk — see ADR-0023's "what was tried and rejected" section.
-- `.csproj` `<ProjectReference>` edges are not read — namespace resolution is exact-match-only
-  across every `.csproj` a run's walk found, regardless of whether one project actually
-  references another.
+- ~~`.csproj` `<ProjectReference>` edges are not read~~ **closed**: `loadCSharpProjects` now reads
+  every `<ProjectReference>` (`internal/index/csproj.go`), and a `using` directive only crosses
+  into ANOTHER project's directory when the calling file's own project can reach it — directly OR
+  transitively (real MSBuild semantics: A referencing B referencing C means A can use C's public
+  types too) — via a real reference chain (`lang_csharp.go`'s `resolveImportPath`/
+  `transitivelyReferences`), never merely because the namespace happens to exist somewhere in the
+  repo. A direct-only check was tried first and measurably regressed eShopOnWeb (337 -> 329
+  resolved edges — IntegrationTests reaches ApplicationCore only via UnitTests, never a direct
+  reference of its own); the transitive version restores the baseline exactly (337 resolved
+  edges, 0.0% bug_rate) while still correctly blocking a namespace with no real reference path at
+  all (verified by a dedicated test). A file this index cannot attribute to any known project
+  (an edge case) falls back to the old permissive behavior rather than risk denying a legitimate
+  same-project resolution it simply couldn't verify.
 - Real-repo Context Compiler recall (0.65 vs 0.85 target, `fixtures/tasks/eshoponweb.json`)
   remains open — a seeding/ranking limitation (spot-checked: both gold entities of one
   zero-recall task are correctly extracted and findable), the same category ADR-0022 already

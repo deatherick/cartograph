@@ -858,9 +858,9 @@ func TestDependents_Go_PackageSiblingsAndImporter(t *testing.T) {
 	}
 }
 
-// csEntity mirrors goEntity for C# — every test below only needs a
-// KindMethod named "IsValid", unlike Go's own tests.
-func csEntity(qualified string) model.Entity {
+// csEntity mirrors goEntity for C# — every test below only needs
+// KindMethod entities, unlike Go's own tests.
+func csEntity(qualified, name string) model.Entity {
 	const repo = "repo"
 	return model.Entity{
 		ID:        model.NewEntityID(repo, model.KindMethod, qualified, ""),
@@ -868,7 +868,7 @@ func csEntity(qualified string) model.Entity {
 		Lang:      model.LangCSharp,
 		Repo:      repo,
 		Qualified: qualified,
-		Name:      "IsValid",
+		Name:      name,
 	}
 }
 
@@ -887,7 +887,7 @@ func csIndex(projects []CSharpProject) *Index {
 func TestResolve_CSharp_ExtensionMethod_ResolvesThroughUnrelatedClass(t *testing.T) {
 	idx := csIndex(nil)
 
-	extEnt := csEntity("src/Extensions#OrderExtensions.IsValid")
+	extEnt := csEntity("src/Extensions#OrderExtensions.IsValid", "IsValid")
 	extFacts := &model.FileFacts{
 		Lang: model.LangCSharp, File: "src/Extensions/OrderExtensions.cs",
 		Entities:         []model.Entity{extEnt},
@@ -920,7 +920,7 @@ func TestResolve_CSharp_ExtensionMethod_ResolvesThroughUnrelatedClass(t *testing
 func TestResolve_CSharp_ExtensionMethod_OutOfScopeDirectory_DoesNotResolve(t *testing.T) {
 	idx := csIndex(nil)
 
-	extEnt := csEntity("src/Other#OrderExtensions.IsValid")
+	extEnt := csEntity("src/Other#OrderExtensions.IsValid", "IsValid")
 	extFacts := &model.FileFacts{
 		Lang: model.LangCSharp, File: "src/Other/OrderExtensions.cs",
 		Entities:         []model.Entity{extEnt},
@@ -950,8 +950,8 @@ func TestResolve_CSharp_ExtensionMethod_OutOfScopeDirectory_DoesNotResolve(t *te
 func TestResolve_CSharp_SameClassMethod_TakesPrecedenceOverExtensionMethod(t *testing.T) {
 	idx := csIndex(nil)
 
-	instanceEnt := csEntity("src/Extensions#Order.IsValid")
-	extEnt := csEntity("src/Extensions#OrderExtensions.IsValid")
+	instanceEnt := csEntity("src/Extensions#Order.IsValid", "IsValid")
+	extEnt := csEntity("src/Extensions#OrderExtensions.IsValid", "IsValid")
 	facts := &model.FileFacts{
 		Lang: model.LangCSharp, File: "src/Extensions/Order.cs",
 		Entities:         []model.Entity{instanceEnt, extEnt},
@@ -973,5 +973,104 @@ func TestResolve_CSharp_SameClassMethod_TakesPrecedenceOverExtensionMethod(t *te
 	}
 	if got[0].Edge.Dst != instanceEnt.ID {
 		t.Fatalf("expected the instance method to take precedence, got %s want %s", got[0].Edge.Dst, instanceEnt.ID)
+	}
+}
+
+// TestResolve_CSharp_ProjectReference_AllowsCrossProjectResolution closes
+// a documented gap: a `using` directive naming another project's
+// namespace only resolves across that project boundary when a real
+// `<ProjectReference>` says the boundary is crossable.
+func TestResolve_CSharp_ProjectReference_AllowsCrossProjectResolution(t *testing.T) {
+	idx := csIndex([]CSharpProject{
+		{Dir: "src/Core", RootNamespace: "App.Core"},
+		{Dir: "src/Web", RootNamespace: "App.Web", ProjectReferences: []string{"src/Core"}},
+	})
+
+	target := csEntity("src/Core#Validator", "Validator")
+	targetFacts := &model.FileFacts{Lang: model.LangCSharp, File: "src/Core/Validator.cs", Entities: []model.Entity{target}}
+
+	callerFacts := &model.FileFacts{
+		Lang: model.LangCSharp,
+		File: "src/Web/Caller.cs",
+		Imports: []model.ImportBinding{{Source: "App.Core", IsNamespace: true}},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "Validator"}},
+		},
+	}
+	idx.AddFile(targetFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected a real ProjectReference to allow cross-project resolution, got %+v", got)
+	}
+	if got[0].Edge.Dst != target.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, target.ID)
+	}
+}
+
+// TestResolve_CSharp_NoProjectReference_BlocksCrossProjectResolution is
+// the negative case: the SAME `using` directive, but src/Web has NO
+// `<ProjectReference>` to src/Core — real C# code in that shape would not
+// compile, so this must NOT resolve either, never a guess that "looks
+// right" from the namespace match alone.
+func TestResolve_CSharp_NoProjectReference_BlocksCrossProjectResolution(t *testing.T) {
+	idx := csIndex([]CSharpProject{
+		{Dir: "src/Core", RootNamespace: "App.Core"},
+		{Dir: "src/Web", RootNamespace: "App.Web"}, // no ProjectReferences
+	})
+
+	target := csEntity("src/Core#Validator", "Validator")
+	targetFacts := &model.FileFacts{Lang: model.LangCSharp, File: "src/Core/Validator.cs", Entities: []model.Entity{target}}
+
+	callerFacts := &model.FileFacts{
+		Lang: model.LangCSharp,
+		File: "src/Web/Caller.cs",
+		Imports: []model.ImportBinding{{Source: "App.Core", IsNamespace: true}},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "Validator"}},
+		},
+	}
+	idx.AddFile(targetFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition == model.DispositionResolved {
+		t.Fatalf("expected cross-project resolution to be blocked with no ProjectReference, got %+v", got)
+	}
+}
+
+// TestResolve_CSharp_ProjectReference_TransitiveResolution mirrors the
+// exact real-repo shape found in eShopOnWeb (IntegrationTests reaches
+// ApplicationCore only via UnitTests, never a direct reference of its
+// own) — MSBuild project references flow transitively for compilation, a
+// direct-only check would wrongly block this.
+func TestResolve_CSharp_ProjectReference_TransitiveResolution(t *testing.T) {
+	idx := csIndex([]CSharpProject{
+		{Dir: "src/Core", RootNamespace: "App.Core"},
+		{Dir: "src/Web", RootNamespace: "App.Web", ProjectReferences: []string{"src/Core"}},
+		{Dir: "tests/Integration", RootNamespace: "App.Tests", ProjectReferences: []string{"src/Web"}},
+	})
+
+	target := csEntity("src/Core#Validator", "Validator")
+	targetFacts := &model.FileFacts{Lang: model.LangCSharp, File: "src/Core/Validator.cs", Entities: []model.Entity{target}}
+
+	callerFacts := &model.FileFacts{
+		Lang: model.LangCSharp,
+		File: "tests/Integration/Caller.cs",
+		Imports: []model.ImportBinding{{Source: "App.Core", IsNamespace: true}},
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeUnqualified, Name: "Validator"}},
+		},
+	}
+	idx.AddFile(targetFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected a transitive ProjectReference (tests/Integration -> src/Web -> src/Core) to allow resolution, got %+v", got)
+	}
+	if got[0].Edge.Dst != target.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, target.ID)
 	}
 }
