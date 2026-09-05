@@ -326,11 +326,16 @@ Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files
   before this runs against a repo with thousands of directories.
 - No exclusion churn quarantine, no `.git/HEAD` branch-change poller, no crash-reconcile-on-
   restart needed (ADR-0020: `ctxd` always runs a fresh full index at startup, so a restart after
-  downtime naturally reconciles) — `ctxd` still runs in the foreground only. Multi-project watching
-  itself is done (ADR-0019: `ctxd <path> [<path>...]`, one goroutine, `opstatus.Tracker`, and now
-  one live `Indexer` per project); the still-open gap is a real `ctxd project add/list` command
-  that adds/removes a project from an *already-running* daemon without restarting it. All
-  explicitly deferred, catalogued in `docs/research/edge-case-backlog.md`'s `F`/`G` sections.
+  downtime naturally reconciles). Multi-project watching itself is done (ADR-0019: `ctxd <path>
+  [<path>...]`, one goroutine, `opstatus.Tracker`, and one live `Indexer` per project). ~~the
+  still-open gap is a real `ctxd project add/list` command that adds/removes a project from an
+  *already-running* daemon without restarting it~~ **stale — this was actually closed by
+  ADR-0026 (Phase 9)**: `ctxd` with no arguments watches every project in
+  `~/.cartograph/projects.json` and reconciles against it every `registryPollInterval`
+  (`cmd/ctxd/main.go`'s `reconcile`), so `ctx project add`/`remove` takes effect on the running
+  system-service daemon with no restart — this bullet just never got updated when that landed.
+  All remaining items here are explicitly deferred, catalogued in
+  `docs/research/edge-case-backlog.md`'s `F`/`G` sections.
 - `internal/search`'s FTS5/fuzzy layer does not exist — exact and qualified-name lookup (a linear
   scan) cover today's real need; SQLite is deferred until a feature already needs it
   (ADR-0006).
@@ -338,18 +343,25 @@ Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files
   ledger is advisory state, not correctness-critical (`internal/ledger`'s package doc).
 
 ### CLI / UX
-- `--file <substring>` disambiguation exists but there is no equivalent for `ctx context` itself
-  — a task capsule can't currently be scoped to "only consider files matching X."
+- ~~`--file <substring>` disambiguation exists but there is no equivalent for `ctx context`
+  itself~~ **stale — closed in the known-issues sweep**: `ctx context <path> "<task>" [--budget N]
+  [--session ID] [--file <substring>]` and the `context_index`/`compile` MCP tool's `file` arg
+  both scope Context Compiler SEEDING to matching files (graph expansion stays unrestricted,
+  deliberately — see `Options.FileFilter`'s doc, `internal/compile/compile.go`). This bullet just
+  never got updated when that landed.
   Repo directory naming collisions across two different paths sharing a repo name are handled by
   path hashing (`internal/store.RepoDir`).
 - ~~No real multi-project management~~ — **fixed on both sides now**: `internal/project` (`ctx
   project add/list/remove`) is the CLI-only name→path registry (ADR-0016); `ctxd` (ADR-0019) takes
   multiple `<path>` arguments (each also resolved through that same registry) and watches all of
   them concurrently, with `internal/httpserver` and the Web UI scoping every request to a
-  `?project=` and offering a live switcher. Still open: a `ctxd project add/list` that adds/removes
-  a project from an *already-running* daemon (today the project list is fixed at `ctxd` startup);
-  MCP's tools still don't resolve a registered name either (their `root` argument stays "absolute
-  path" only).
+  `?project=` and offering a live switcher. ~~Still open: a `ctxd project add/list` that
+  adds/removes a project from an *already-running* daemon ... MCP's tools still don't resolve a
+  registered name either~~ **both stale — both closed since**: `ctxd`'s zero-argument mode
+  reconciles against `~/.cartograph/projects.json` with no restart (ADR-0026, Phase 9), and every
+  MCP tool's `root` argument now resolves a registered project name via `project.Resolve`
+  (`internal/mcpserver/mcpserver.go`, closed in the known-issues sweep). These bullets just never
+  got updated when each landed.
 
 ## Explicitly deferred (post-MVP, tracked not forgotten)
 
