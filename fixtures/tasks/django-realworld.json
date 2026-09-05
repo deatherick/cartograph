@@ -1,0 +1,69 @@
+{
+  "fixture": "django-realworld-example-app",
+  "note": "External real-world Python repo, not vendored into this repository. Clone locally before running: git clone --depth 1 https://github.com/gothinkster/django-realworld-example-app ~/code/_ref/django-realworld-example-app, then run ctxbench with --fixtures-root ~/code/_ref --tasks fixtures/tasks/django-realworld.json. Gold sets are whole-file for V0, same limitation as every other task set here. This is Phase 3c's (ADR-0024) real-repo validation fixture for the Python extractor, the same RealWorld/Conduit methodology already used for TypeScript (realworld-ts.json) and, with a different real app, C# (eshoponweb.json).",
+  "tasks": [
+    {
+      "id": "D01",
+      "prompt": "Why does an article's slug get a random suffix appended instead of just slugifying the title?",
+      "gold_files": ["conduit/apps/articles/signals.py", "conduit/apps/articles/models.py"],
+      "grep_steps": [
+        { "pattern": "add_slug_to_article_if_not_exists", "note": "find the slug-generation signal handler" },
+        { "pattern": "generate_random_string", "note": "find the random-suffix helper it calls" }
+      ]
+    },
+    {
+      "id": "D02",
+      "prompt": "Is the JWT token's expiration configurable, or hardcoded? Where would I change token lifetime?",
+      "gold_files": ["conduit/apps/authentication/models.py"],
+      "grep_steps": [
+        { "pattern": "_generate_jwt_token", "note": "find token generation" },
+        { "pattern": "timedelta", "note": "find expiration logic" }
+      ]
+    },
+    {
+      "id": "D03",
+      "prompt": "Add an endpoint to let a user block another user, reusing the existing follow/unfollow pattern.",
+      "gold_files": ["conduit/apps/profiles/models.py", "conduit/apps/profiles/views.py"],
+      "grep_steps": [
+        { "pattern": "def follow", "note": "existing follow pattern to mirror" },
+        { "pattern": "is_following", "note": "existing membership check" }
+      ]
+    },
+    {
+      "id": "D04",
+      "prompt": "Trace what happens when a user favorites an article — which model method actually records it?",
+      "gold_files": ["conduit/apps/articles/views.py", "conduit/apps/profiles/models.py"],
+      "grep_steps": [
+        { "pattern": "class ArticlesFavoriteAPIView", "note": "the view that handles the favorite request" },
+        { "pattern": "def favorite", "note": "the model method that actually records it" }
+      ]
+    },
+    {
+      "id": "D05",
+      "prompt": "Add server-side validation that a new user's password meets a minimum length.",
+      "gold_files": ["conduit/apps/authentication/serializers.py", "conduit/apps/authentication/models.py"],
+      "grep_steps": [
+        { "pattern": "class RegistrationSerializer", "note": "registration entrypoint" },
+        { "pattern": "create_user", "note": "where the user is actually created" }
+      ]
+    },
+    {
+      "id": "D06",
+      "prompt": "Why does deleting a comment not soft-delete it — is there any recovery path?",
+      "gold_files": ["conduit/apps/articles/views.py", "conduit/apps/articles/models.py"],
+      "grep_steps": [
+        { "pattern": "class CommentsDestroyAPIView", "note": "the delete endpoint" },
+        { "pattern": "comment.delete", "note": "confirm it's a hard delete" }
+      ]
+    },
+    {
+      "id": "D07",
+      "prompt": "Add a field to an article and make sure new articles created through the API populate it.",
+      "gold_files": ["conduit/apps/articles/models.py", "conduit/apps/articles/serializers.py"],
+      "grep_steps": [
+        { "pattern": "class Article", "note": "the article model" },
+        { "pattern": "class ArticleSerializer", "note": "where article creation is handled" }
+      ]
+    }
+  ]
+}

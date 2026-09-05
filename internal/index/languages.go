@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 
 	"github.com/deatherick/cartograph/internal/parser"
+	"github.com/deatherick/cartograph/internal/parser/csharp"
 	"github.com/deatherick/cartograph/internal/parser/golang"
+	"github.com/deatherick/cartograph/internal/parser/python"
 	"github.com/deatherick/cartograph/internal/parser/ts"
 	"github.com/deatherick/cartograph/internal/resolve"
 )
@@ -45,6 +47,11 @@ type Language struct {
 func registry(root string) []Language {
 	tsCfg, _ := loadTSConfig(root)
 	goModule, _ := loadGoModule(root)
+	csProjects := loadCSharpProjects(root)
+	resolveProjects := make([]resolve.CSharpProject, len(csProjects))
+	for i, p := range csProjects {
+		resolveProjects[i] = resolve.CSharpProject{Dir: p.Dir, RootNamespace: p.RootNamespace}
+	}
 	return []Language{
 		{
 			Name:      "typescript",
@@ -59,6 +66,20 @@ func registry(root string) []Language {
 			Extractor: golang.New(),
 			Policy:    resolve.NewGoPolicy(goModule),
 			Detect:    func(root string) bool { return detectByMarkerOrExtension(root, []string{"go.mod"}, []string{".go"}) },
+		},
+		{
+			Name:      "csharp",
+			Extractor: csharp.New(),
+			Policy:    resolve.NewCSharpPolicy(resolveProjects),
+			Detect:    func(root string) bool { return detectByMarkerOrExtension(root, nil, []string{".cs"}) },
+		},
+		{
+			Name:      "python",
+			Extractor: python.New(),
+			Policy:    resolve.NewPythonPolicy(),
+			Detect: func(root string) bool {
+				return detectByMarkerOrExtension(root, []string{"setup.py", "pyproject.toml", "requirements.txt"}, []string{".py"})
+			},
 		},
 	}
 }

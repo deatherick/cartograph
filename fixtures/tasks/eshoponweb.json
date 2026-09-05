@@ -1,0 +1,78 @@
+{
+  "fixture": "eShopOnWeb",
+  "note": "External real-world .NET repo, not vendored into this repository. Clone locally before running: git clone --depth 1 https://github.com/dotnet-architecture/eShopOnWeb ~/code/_ref/eShopOnWeb, then run ctxbench with --fixtures-root ~/code/_ref --tasks fixtures/tasks/eshoponweb.json. Gold sets are whole-file for V0, same limitation as fixtures/tasks/ts-basic.json/realworld-ts.json — see their notes. This is Phase 3b's (ADR-0023) real-repo validation fixture for the C# extractor, the same methodology used for TypeScript (realworld-ts.json).",
+  "tasks": [
+    {
+      "id": "C01",
+      "prompt": "Why does adding a duplicate catalog item to a basket increase its quantity instead of adding a second line item?",
+      "gold_files": ["src/ApplicationCore/Entities/BasketAggregate/Basket.cs", "src/ApplicationCore/Entities/BasketAggregate/BasketItem.cs"],
+      "grep_steps": [
+        { "pattern": "public void AddItem", "note": "find where a basket item is added" },
+        { "pattern": "AddQuantity", "note": "find the existing-item merge path" }
+      ]
+    },
+    {
+      "id": "C02",
+      "prompt": "Add validation so a basket item's quantity can never go negative when quantities are updated in bulk.",
+      "gold_files": ["src/ApplicationCore/Entities/BasketAggregate/BasketItem.cs", "src/ApplicationCore/Services/BasketService.cs"],
+      "grep_steps": [
+        { "pattern": "public void SetQuantity", "note": "find the existing quantity guard" },
+        { "pattern": "SetQuantities", "note": "find the bulk-update entry point" }
+      ]
+    },
+    {
+      "id": "C03",
+      "prompt": "What throws if a checkout is attempted with an empty basket, and where is that guard clause defined?",
+      "gold_files": ["src/ApplicationCore/Services/OrderService.cs", "src/ApplicationCore/Extensions/GuardExtensions.cs", "src/ApplicationCore/Exceptions/EmptyBasketOnCheckoutException.cs"],
+      "grep_steps": [
+        { "pattern": "EmptyBasketOnCheckout", "note": "find the guard call" },
+        { "pattern": "class EmptyBasketOnCheckoutException", "note": "find the exception it throws" }
+      ]
+    },
+    {
+      "id": "C04",
+      "prompt": "Add a new field to an order line item and make sure it's populated when an order is created from a basket.",
+      "gold_files": ["src/ApplicationCore/Entities/OrderAggregate/OrderItem.cs", "src/ApplicationCore/Entities/OrderAggregate/Order.cs", "src/ApplicationCore/Services/OrderService.cs"],
+      "grep_steps": [
+        { "pattern": "class OrderItem", "note": "find the order line item entity" },
+        { "pattern": "CreateOrderAsync", "note": "find where order items are built from the basket" }
+      ]
+    },
+    {
+      "id": "C05",
+      "prompt": "Add server-side filtering of the catalog by brand and item type together, reusing the existing specification pattern.",
+      "gold_files": ["src/ApplicationCore/Specifications/CatalogFilterSpecification.cs", "src/Web/Services/CatalogViewModelService.cs"],
+      "grep_steps": [
+        { "pattern": "class CatalogFilterSpecification", "note": "existing filter specification to extend" },
+        { "pattern": "CatalogFilterSpecification", "note": "find where it's constructed and used" }
+      ]
+    },
+    {
+      "id": "C06",
+      "prompt": "Trace what actually responds when a user requests their order history — which handler runs the query?",
+      "gold_files": ["src/Web/Controllers/OrderController.cs", "src/Web/Features/MyOrders/GetMyOrders.cs", "src/Web/Features/MyOrders/GetMyOrdersHandler.cs"],
+      "grep_steps": [
+        { "pattern": "public async Task<IActionResult> MyOrders", "note": "controller action" },
+        { "pattern": "class GetMyOrdersHandler", "note": "MediatR handler that actually runs the query" }
+      ]
+    },
+    {
+      "id": "C07",
+      "prompt": "Is a basket's total price ever cached, or always recomputed from its items?",
+      "gold_files": ["src/ApplicationCore/Entities/BasketAggregate/Basket.cs", "src/ApplicationCore/Entities/BasketAggregate/BasketItem.cs"],
+      "grep_steps": [
+        { "pattern": "TotalItems", "note": "find any total/aggregate property on Basket" },
+        { "pattern": "UnitPrice", "note": "find where a per-item price is read" }
+      ]
+    },
+    {
+      "id": "C08",
+      "prompt": "Add a repository method to look up an order together with its line items by ID, following the existing specification pattern used elsewhere for baskets.",
+      "gold_files": ["src/ApplicationCore/Specifications/OrderWithItemsByIdSpec.cs", "src/ApplicationCore/Specifications/BasketWithItemsSpecification.cs"],
+      "grep_steps": [
+        { "pattern": "class BasketWithItemsSpecification", "note": "existing specification pattern to mirror" },
+        { "pattern": "class OrderWithItemsByIdSpec", "note": "the analogous order-side specification, if it already exists" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "fixture": "csharp-basic",
+  "note": "Vendored, synthetic C# fixture (ADR-0023, Phase 3b) — the C# analog of fixtures/ts-basic and fixtures/tasks/ts-basic.json, small enough for fast unit-style ctxbench runs. Gold sets are whole-file for V0, same limitation as every other task set here. Real-repo validation for C# is fixtures/tasks/eshoponweb.json instead — this fixture exists for a fast, controlled regression signal, not to prove real-world recall.",
+  "tasks": [
+    {
+      "id": "S01",
+      "prompt": "Add quantity validation to PlaceOrder: reject any line with quantity <= 0.",
+      "gold_files": ["Services/OrderService.cs", "Models/Order.cs", "Utils/Validation.cs"],
+      "grep_steps": [
+        { "pattern": "PlaceOrder", "note": "find where orders are placed" },
+        { "pattern": "class OrderLine", "note": "find the shape of an order line" },
+        { "pattern": "ValidationError", "note": "find how validation errors are raised" }
+      ]
+    },
+    {
+      "id": "S02",
+      "prompt": "Why does registering a user with an existing email fail, and where is that enforced?",
+      "gold_files": ["Services/UserService.cs", "Repositories/UserRepository.cs", "Utils/Validation.cs"],
+      "grep_steps": [
+        { "pattern": "Register", "note": "find registration entrypoint" },
+        { "pattern": "FindByEmail", "note": "find email lookup" },
+        { "pattern": "ValidationError", "note": "confirm error type" }
+      ]
+    },
+    {
+      "id": "S03",
+      "prompt": "Add an admin-only endpoint to promote a user, wiring controller -> service -> repository.",
+      "gold_files": [
+        "Controllers/UserController.cs",
+        "Services/UserService.cs",
+        "Repositories/UserRepository.cs",
+        "Models/User.cs"
+      ],
+      "grep_steps": [
+        { "pattern": "PromoteToAdmin", "note": "existing service method" },
+        { "pattern": "class UserController", "note": "controller shape" },
+        { "pattern": "IsAdmin", "note": "existing admin flag" }
+      ]
+    },
+    {
+      "id": "S04",
+      "prompt": "Add an endpoint to look up an order by ID, wiring controller -> service -> repository.",
+      "gold_files": [
+        "Controllers/OrderController.cs",
+        "Services/OrderService.cs",
+        "Repositories/IOrderRepository.cs",
+        "Repositories/OrderRepository.cs"
+      ],
+      "grep_steps": [
+        { "pattern": "GetOrder", "note": "existing lookup method" },
+        { "pattern": "FindById", "note": "repository lookup" }
+      ]
+    }
+  ]
+}

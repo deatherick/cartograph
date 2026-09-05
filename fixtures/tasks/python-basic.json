@@ -1,0 +1,54 @@
+{
+  "fixture": "python-basic",
+  "note": "Vendored, synthetic Python fixture (ADR-0024, Phase 3c) — the Python analog of fixtures/csharp-basic and fixtures/tasks/csharp-basic.json, small enough for fast unit-style ctxbench runs. Gold sets are whole-file for V0, same limitation as every other task set here. Real-repo validation for Python is fixtures/tasks/django-realworld.json instead — this fixture exists for a fast, controlled regression signal, not to prove real-world recall.",
+  "tasks": [
+    {
+      "id": "P01",
+      "prompt": "Add quantity validation to place_order: reject any line with quantity <= 0.",
+      "gold_files": ["myapp/services.py", "myapp/models.py", "myapp/utils.py"],
+      "grep_steps": [
+        { "pattern": "def place_order", "note": "find where orders are placed" },
+        { "pattern": "class OrderLine", "note": "find the shape of an order line" },
+        { "pattern": "ValidationError", "note": "find how validation errors are raised" }
+      ]
+    },
+    {
+      "id": "P02",
+      "prompt": "Why does registering a user with an existing email fail, and where is that enforced?",
+      "gold_files": ["myapp/services.py", "myapp/repositories.py", "myapp/utils.py"],
+      "grep_steps": [
+        { "pattern": "def register", "note": "find registration entrypoint" },
+        { "pattern": "find_by_email", "note": "find email lookup" },
+        { "pattern": "ValidationError", "note": "confirm error type" }
+      ]
+    },
+    {
+      "id": "P03",
+      "prompt": "Add an admin-only endpoint to promote a user, wiring controller -> service -> repository.",
+      "gold_files": [
+        "myapp/controllers.py",
+        "myapp/services.py",
+        "myapp/repositories.py",
+        "myapp/models.py"
+      ],
+      "grep_steps": [
+        { "pattern": "promote_to_admin", "note": "existing service method" },
+        { "pattern": "class UserController", "note": "controller shape" },
+        { "pattern": "is_admin", "note": "existing admin flag" }
+      ]
+    },
+    {
+      "id": "P04",
+      "prompt": "Add an endpoint to look up an order by ID, wiring controller -> service -> repository.",
+      "gold_files": [
+        "myapp/controllers.py",
+        "myapp/services.py",
+        "myapp/repositories.py"
+      ],
+      "grep_steps": [
+        { "pattern": "def get_order", "note": "existing lookup method" },
+        { "pattern": "find_by_id", "note": "repository lookup" }
+      ]
+    }
+  ]
+}

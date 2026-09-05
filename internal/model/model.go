@@ -42,12 +42,17 @@ func (k Kind) overloadable() bool {
 // Lang identifies the source language of an entity. V0 targets TypeScript/
 // JavaScript first (Phase 1); Go, C#, and Python are Phase 3 — Go first,
 // since it is the language this project's own source is written in and the
-// self-hosting milestone (docs/MVP.md's deferred list) needs it.
+// self-hosting milestone (docs/MVP.md's deferred list) needs it. C# is
+// Phase 3b (ADR-0023) and Python is Phase 3c (ADR-0024), each added via
+// the plug-and-play architecture (ADR-0011) with no change to this
+// package beyond one new constant.
 type Lang string
 
 const (
-	LangTS Lang = "ts"
-	LangGo Lang = "go"
+	LangTS     Lang = "ts"
+	LangGo     Lang = "go"
+	LangCSharp Lang = "cs"
+	LangPython Lang = "py"
 )
 
 // EntityID is a stable, opaque identifier. Deliberately excludes file and
