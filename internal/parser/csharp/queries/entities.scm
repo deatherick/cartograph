@@ -66,6 +66,22 @@
   type: [(identifier) (generic_name)] @entity.proptype
   name: (identifier) @entity.name) @entity.property
 
+; Extension methods: `public static T Foo(this ExtendedType x, ...)`. The
+; `this` parameter modifier is only valid (real, compiling C#) on a
+; method's FIRST parameter — anchored here with `.` (parameter_list's
+; own "(" token doesn't count against a query's anchor, only named
+; children do, confirmed the same way route.call's `.`-anchored
+; arguments pattern already works in internal/parser/ts). Captured
+; generically: ANY parameter-list modifier, filtered against the exact
+; literal "this" in Go (isThisModifier) rather than narrowed here — a
+; parameter can carry OTHER modifiers (`ref`, `scoped`, `in`,
+; `readonly`), and only "this" makes this an extension method.
+(method_declaration
+  parameters: (parameter_list
+    . (parameter
+        (modifier) @ext.modifier
+        type: [(identifier) (generic_name)] @ext.type))) @ext.methodnode
+
 ; xUnit/NUnit/MSTest test-method detection via attributes: `[Fact]`,
 ; `[Theory]`, `[Test]`, `[TestMethod]` (bare or namespace-qualified,
 ; `[Xunit.Fact]`). attribute_list is an unnamed, positional child of

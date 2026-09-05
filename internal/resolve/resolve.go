@@ -56,6 +56,13 @@ type fileEntry struct {
 	// `export { a as b } from`) — TypeScript-specific (Go has no
 	// barrel-file concept), consulted only by lang_ts.go.
 	reExports []model.ReExport
+	// extensionMethodsByType indexes C#'s extension methods (`public
+	// static T Foo(this ExtendedType x, ...)`, model.ExtensionMethod's
+	// doc) by the TYPE THEY EXTEND, not their own declaring class —
+	// C#-specific (no other language's extractor populates
+	// facts.ExtensionMethods), consulted only by lang_csharp.go's
+	// FollowImportToMethods.
+	extensionMethodsByType map[string]map[string]model.EntityID
 }
 
 // Index accumulates every file's facts before resolution starts — the
@@ -140,13 +147,20 @@ func (idx *Index) AddFile(facts *model.FileFacts) {
 	}
 	dir := path.Dir(facts.File)
 	fe := &fileEntry{
-		lang:           facts.Lang,
-		dir:            dir,
-		entities:       facts.Entities,
-		byName:         map[string][]model.EntityID{},
-		imports:        facts.Imports,
-		reExports:      facts.ReExports,
-		methodsByOwner: map[string]map[string]model.EntityID{},
+		lang:                   facts.Lang,
+		dir:                    dir,
+		entities:               facts.Entities,
+		byName:                 map[string][]model.EntityID{},
+		imports:                facts.Imports,
+		reExports:              facts.ReExports,
+		methodsByOwner:         map[string]map[string]model.EntityID{},
+		extensionMethodsByType: map[string]map[string]model.EntityID{},
+	}
+	for _, em := range facts.ExtensionMethods {
+		if fe.extensionMethodsByType[em.ExtendedType] == nil {
+			fe.extensionMethodsByType[em.ExtendedType] = map[string]model.EntityID{}
+		}
+		fe.extensionMethodsByType[em.ExtendedType][em.Name] = em.EntityID
 	}
 	idx.filesByDir[dir] = append(idx.filesByDir[dir], facts.File)
 	for _, e := range facts.Entities {

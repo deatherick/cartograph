@@ -296,17 +296,31 @@ type ReExport struct {
 	LocalAlias   string // the name it's re-exported as; equals ExportedName when there is no `as`
 }
 
+// ExtensionMethod pairs a method entity with the type it extends via C#'s
+// `this` parameter modifier (`public static T Foo(this ExtendedType x,
+// ...)`, internal/parser/csharp's ext.methodnode query doc) — a call
+// through a value of ExtendedType can then reach Method even though
+// Method's declaring class is completely unrelated to ExtendedType,
+// unlike an ordinary same-class method. Populated only by the C#
+// extractor; every other language's FileFacts leaves this nil.
+type ExtensionMethod struct {
+	EntityID     EntityID
+	Name         string
+	ExtendedType string
+}
+
 // FileFacts is everything an extractor produces for one file: entities plus
 // unresolved refs and the import table, before any cross-file resolution
 // has happened.
 type FileFacts struct {
-	File       string // slash-normalized, repo-relative
-	Lang       Lang
-	Entities   []Entity
-	Refs       []Ref
-	Imports    []ImportBinding
-	ReExports  []ReExport
-	ErrorRatio float64 // from the parser's syntax-error gate
+	File             string // slash-normalized, repo-relative
+	Lang             Lang
+	Entities         []Entity
+	Refs             []Ref
+	Imports          []ImportBinding
+	ReExports        []ReExport
+	ExtensionMethods []ExtensionMethod
+	ErrorRatio       float64 // from the parser's syntax-error gate
 }
 
 // RelatedEntity pairs an entity with the graph-traversal depth at which it

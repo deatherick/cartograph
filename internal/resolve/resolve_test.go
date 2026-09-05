@@ -857,3 +857,121 @@ func TestDependents_Go_PackageSiblingsAndImporter(t *testing.T) {
 		t.Errorf("expected the importing file cmd/main.go among dependents, got %v", deps)
 	}
 }
+
+// csEntity mirrors goEntity for C# — every test below only needs a
+// KindMethod named "IsValid", unlike Go's own tests.
+func csEntity(qualified string) model.Entity {
+	const repo = "repo"
+	return model.Entity{
+		ID:        model.NewEntityID(repo, model.KindMethod, qualified, ""),
+		Kind:      model.KindMethod,
+		Lang:      model.LangCSharp,
+		Repo:      repo,
+		Qualified: qualified,
+		Name:      "IsValid",
+	}
+}
+
+// csIndex mirrors goIndex for C#.
+func csIndex(projects []CSharpProject) *Index {
+	idx := NewIndex("repo")
+	idx.RegisterPolicy(NewCSharpPolicy(projects))
+	return idx
+}
+
+// TestResolve_CSharp_ExtensionMethod_ResolvesThroughUnrelatedClass closes
+// a documented gap: a call through an Order value must resolve to
+// OrderExtensions.IsValid — a completely unrelated class — via C#'s
+// extension-method mechanism, since Order itself has no IsValid method
+// of its own.
+func TestResolve_CSharp_ExtensionMethod_ResolvesThroughUnrelatedClass(t *testing.T) {
+	idx := csIndex(nil)
+
+	extEnt := csEntity("src/Extensions#OrderExtensions.IsValid")
+	extFacts := &model.FileFacts{
+		Lang: model.LangCSharp, File: "src/Extensions/OrderExtensions.cs",
+		Entities:         []model.Entity{extEnt},
+		ExtensionMethods: []model.ExtensionMethod{{EntityID: extEnt.ID, Name: "IsValid", ExtendedType: "Order"}},
+	}
+	callerFacts := &model.FileFacts{
+		Lang: model.LangCSharp,
+		File: "src/Extensions/Caller.cs",
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "order", Member: "IsValid", ReceiverType: "Order"}},
+		},
+	}
+	idx.AddFile(extFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected extension-method resolution, got %+v", got)
+	}
+	if got[0].Edge.Dst != extEnt.ID {
+		t.Fatalf("resolved to wrong entity: got %s want %s", got[0].Edge.Dst, extEnt.ID)
+	}
+}
+
+// TestResolve_CSharp_ExtensionMethod_OutOfScopeDirectory_DoesNotResolve
+// verifies FollowImportToMethods only searches SameScopeFiles (same
+// directory, or a `using`-resolved one) — an extension method declared
+// in a directory never brought into scope must NOT resolve, matching
+// real C#'s own visibility rule for extension methods.
+func TestResolve_CSharp_ExtensionMethod_OutOfScopeDirectory_DoesNotResolve(t *testing.T) {
+	idx := csIndex(nil)
+
+	extEnt := csEntity("src/Other#OrderExtensions.IsValid")
+	extFacts := &model.FileFacts{
+		Lang: model.LangCSharp, File: "src/Other/OrderExtensions.cs",
+		Entities:         []model.Entity{extEnt},
+		ExtensionMethods: []model.ExtensionMethod{{EntityID: extEnt.ID, Name: "IsValid", ExtendedType: "Order"}},
+	}
+	callerFacts := &model.FileFacts{
+		Lang: model.LangCSharp,
+		File: "src/Extensions/Caller.cs",
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "order", Member: "IsValid", ReceiverType: "Order"}},
+		},
+	}
+	idx.AddFile(extFacts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition == model.DispositionResolved {
+		t.Fatalf("expected an out-of-scope extension method to NOT resolve, got %+v", got)
+	}
+}
+
+// TestResolve_CSharp_SameClassMethod_TakesPrecedenceOverExtensionMethod
+// verifies real C# semantics: an instance method with the same name
+// always wins over a same-named extension method — resolveByReceiverType
+// must never even reach FollowImportToMethods when methodsByOwner
+// already has the answer.
+func TestResolve_CSharp_SameClassMethod_TakesPrecedenceOverExtensionMethod(t *testing.T) {
+	idx := csIndex(nil)
+
+	instanceEnt := csEntity("src/Extensions#Order.IsValid")
+	extEnt := csEntity("src/Extensions#OrderExtensions.IsValid")
+	facts := &model.FileFacts{
+		Lang: model.LangCSharp, File: "src/Extensions/Order.cs",
+		Entities:         []model.Entity{instanceEnt, extEnt},
+		ExtensionMethods: []model.ExtensionMethod{{EntityID: extEnt.ID, Name: "IsValid", ExtendedType: "Order"}},
+	}
+	callerFacts := &model.FileFacts{
+		Lang: model.LangCSharp,
+		File: "src/Extensions/Caller.cs",
+		Refs: []model.Ref{
+			{Kind: model.RefCall, Target: model.RefTarget{Scope: model.ScopeQualified, Name: "order", Member: "IsValid", ReceiverType: "Order"}},
+		},
+	}
+	idx.AddFile(facts)
+	idx.AddFile(callerFacts)
+
+	got := idx.Resolve([]*model.FileFacts{callerFacts})
+	if len(got) != 1 || got[0].Disposition != model.DispositionResolved {
+		t.Fatalf("expected resolution, got %+v", got)
+	}
+	if got[0].Edge.Dst != instanceEnt.ID {
+		t.Fatalf("expected the instance method to take precedence, got %s want %s", got[0].Edge.Dst, instanceEnt.ID)
+	}
+}

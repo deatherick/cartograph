@@ -295,3 +295,48 @@ func TestExtract_MSTestQualifiedAttribute_IsKindTest(t *testing.T) {
 		t.Fatalf("expected to find a ReturnsOrder entity, got: %+v", facts.Entities)
 	}
 }
+
+// TestExtract_ExtensionMethod_ProducesExtensionMethodFact closes a
+// documented gap: `public static bool IsValid(this Order o)` must
+// produce a model.ExtensionMethod fact (ExtendedType="Order"), the
+// signal the resolver's FollowImportToMethods (lang_csharp.go) needs to
+// resolve a call through an Order value to this method even though
+// OrderExtensions is a completely unrelated class.
+func TestExtract_ExtensionMethod_ProducesExtensionMethodFact(t *testing.T) {
+	const src = `namespace X {
+  public class Order { }
+
+  public static class OrderExtensions {
+    public static bool IsValid(this Order o) {
+      return true;
+    }
+
+    public static void Log(string msg) { }
+  }
+}
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "test-repo", "src/X/OrderExtensions.cs", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(facts.ExtensionMethods) != 1 {
+		t.Fatalf("got %d extension methods, want 1: %+v", len(facts.ExtensionMethods), facts.ExtensionMethods)
+	}
+	em := facts.ExtensionMethods[0]
+	if em.Name != "IsValid" || em.ExtendedType != "Order" {
+		t.Errorf("got %+v, want Name=IsValid ExtendedType=Order", em)
+	}
+	// A same-class-owned entity for IsValid must still exist (it's a
+	// real method, just ALSO an extension method) — this is additive
+	// information, not a replacement of the ordinary entity.
+	var foundEntity bool
+	for _, ent := range facts.Entities {
+		if ent.ID == em.EntityID && ent.Kind == model.KindMethod {
+			foundEntity = true
+		}
+	}
+	if !foundEntity {
+		t.Errorf("expected a KindMethod entity matching the extension method's own ID, got: %+v", facts.Entities)
+	}
+}
