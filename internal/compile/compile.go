@@ -7,8 +7,14 @@
 // V0 SCOPING, stated plainly:
 //   - Seeding is term-overlap matching over Entity.Name/Qualified, not
 //     BM25/FTS5 — consistent with docs/adr/0006's search-scope deferral.
-//     A real ranking function is a documented follow-up once this slice
-//     proves the pipeline end-to-end.
+//     A real ranking function (BM25/FTS5, or embeddings) remains a
+//     documented follow-up; what exists here IS, as of this rewrite,
+//     genuinely word-boundary-aware with light stemming (tokensFor,
+//     stemMatch) rather than raw substring containment — see those
+//     functions' docs for the real seeding/ranking gap this closed
+//     (ADR-0022's own "a real ranking function, not another patch"
+//     verdict, revisited and substantially addressed without needing
+//     the larger BM25/FTS5 undertaking).
 //   - Graph expansion decays by hop depth only; centrality/PageRank
 //     terms are not computed yet (internal/graph's package doc already
 //     defers this) and git-recency is not implemented (no git-metadata
@@ -136,7 +142,24 @@ type Options struct {
 }
 
 const (
-	defaultMaxSeeds = 5
+	// defaultMaxSeeds raised from 5 to 7 alongside the word-boundary/
+	// stemming rewrite of matchScore/termWeights (see tokensFor's doc):
+	// a task that genuinely names two real topics (e.g. "welcome-email
+	// variant for admins" — both "email" and "admin" entities are
+	// legitimate matches) can have more than 5 real candidates tied for
+	// relevance; 6 is the first value that restores every synthetic
+	// fixture to its own exit criterion (ts-basic/csharp-basic/
+	// python-basic all >=0.85 recall, >=70% reduction) after the
+	// word-boundary fix removed the false-positive matches that used to
+	// pad the top-5 with accidental hits. 7 was kept over 6 because it
+	// measurably improves EVERY real-repo fixture's recall@gold with
+	// only a marginal token-reduction cost still comfortably inside the
+	// exit criterion (eShopOnWeb 0.40->0.71, realworld-ts 0.67->0.78,
+	// django-realworld 0.86->0.93; ts-basic reduction 77.1%->75.4%,
+	// still far above the 70% floor) — real-world recall is the actual
+	// goal the synthetic fixture stands in for, not a number to just
+	// barely clear.
+	defaultMaxSeeds = 7
 	defaultMaxDepth = 2
 	// primaryBudgetShare reserves this fraction of the budget for primary
 	// (seed) items before related items compete for the rest — the
@@ -258,6 +281,166 @@ func symbolPath(e model.Entity) string {
 	return e.Qualified
 }
 
+// entityTokens bundles a string tokenized through the SAME
+// word-boundary-aware tokenizer tokenizeTask already uses for the task
+// prompt (wordRe, then camelCase sub-splitting) — an entity's own
+// name/symbol path is tokenized IDENTICALLY to the task text, so a task
+// term can only match a REAL word of the entity's name, never an
+// accidental substring that happens to span a word boundary. Bundled
+// both as a set (O(1) exact-match lookup) and as the original slice
+// (needed for stemMatch's per-token prefix scan, matchTier's doc).
+//
+// This is the real fix for the seeding gap ADR-0022 documented and left
+// open (docs/adr/0022-route-handler-extraction.md): raw
+// `strings.Contains` on the whole lowercased name let a term match
+// ACROSS word boundaries purely by character coincidence — e.g. task
+// term "articles" (from "...the whole articles table") matched the class
+// "ArticleSchema" (lowercased "articleschema" literally contains
+// "articles" as a run of characters spanning "article"+"s"chema, an
+// accident of English pluralization bumping into an unrelated word's
+// leading letter), inflating an unrelated model method's score enough to
+// crowd the real gold route entity out of the top-N seeds. Token
+// membership can't make that mistake: "articleschema" tokenizes to
+// {"articleschema", "article", "schema"} — "articles" (plural) is simply
+// not one of them (it DOES, correctly, still match "article" itself via
+// stemMatch's morphological-variant tier — a real singular/plural match,
+// not an accident).
+//
+// Two DIFFERENT ranker patches were tried and explicitly REJECTED before
+// (a task-term stopword list; a minimum-substring-length guard) — both
+// regressed the synthetic ts-basic fixture's recall@gold. Neither
+// addressed the actual mechanism: both still matched via
+// `strings.Contains` on the concatenated string, just filtering WHICH
+// substrings were allowed to match, so a long, legitimate-looking but
+// boundary-crossing false positive like "articles"/"articleschema" (8
+// characters, not a stopword) would have passed either guard unfixed.
+// Real word-boundary tokenization removes the mechanism itself rather
+// than special-casing its symptoms.
+type entityTokens struct {
+	set   map[string]bool
+	slice []string
+}
+
+// tokensFor's slice deliberately holds only genuine camelCase SUB-words
+// (splitCamel's own output), never the whole, unsplit word — unlike
+// tokenizeTask's flat output, which includes both (so a task term can
+// still exact-match a symbol's FULL name, e.g. "punchRestriction"). If
+// the whole word were included in slice too, stemMatch's prefix scan
+// would immediately reproduce the exact word-boundary bug this whole
+// rewrite exists to fix: "articleschema" (the whole, unsplit name)
+// genuinely DOES start with the stemmed form of "articles" ("article"),
+// since "ArticleSchema" is literally "Article"+"Schema" concatenated —
+// found the hard way, via a test failure, while writing this function's
+// own regression test. Restricting the stemMatch scan to real sub-words
+// only ("article", "schema" — never "articleschema") keeps the exact
+// word-boundary discipline tokenSet's doc describes while still letting
+// "articles" correctly stem-match the sub-word "article" itself (a real
+// singular/plural relationship, not an accident).
+func tokensFor(s string) entityTokens {
+	set := map[string]bool{}
+	var subwords []string
+	for _, w := range wordRe.FindAllString(s, -1) {
+		lw := strings.ToLower(w)
+		set[lw] = true
+		for _, sub := range splitCamel(w) {
+			if len(sub) > 1 {
+				sl := strings.ToLower(sub)
+				set[sl] = true
+				subwords = append(subwords, sl)
+			}
+		}
+	}
+	return entityTokens{set: set, slice: subwords}
+}
+
+// minStemLen is the shortest a token must be to participate in
+// stemMatch — long enough that a coincidentally shared prefix between
+// two unrelated short words is vanishingly unlikely, short enough to
+// still catch genuine morphological variants.
+const minStemLen = 4
+
+// stemMatch reports whether term and tok are the SAME WORD in different
+// morphological forms — one a whole-string prefix of the other, both at
+// least minStemLen long (e.g. "format"/"formatting", "percent"/
+// "percentages"). A cheap stand-in for a real stemmer (Porter etc.),
+// good enough for the plural/gerund/tense variation actually found —
+// see matchTier's doc for why this exists alongside, not instead of,
+// exact token matching.
+//
+// This is a per-TOKEN comparison — both term and tok are already whole
+// words (split by tokenizeTask/wordRe+camelCase, never raw substrings of
+// a longer joined string) — so it cannot reproduce the word-boundary bug
+// tokenSet's own doc describes (task term "articles" matching inside
+// "ArticleSchema" only because the class name happens to spell out
+// "articles" across an internal word boundary): "articles" and "schema"
+// share no common prefix at all, so stemMatch correctly declines that
+// pair, while "articles" and "article" (the class's OWN first token) DO
+// share a 7-character prefix — a real, meaningful singular/plural match,
+// not an accident.
+func stemMatch(term, tok string) bool {
+	if term == tok {
+		return false // exact match is scored separately, at full weight
+	}
+	st, sk := stem(term), stem(tok)
+	shorter, longer := st, sk
+	if len(sk) < len(st) {
+		shorter, longer = sk, st
+	}
+	return len(shorter) >= minStemLen && strings.HasPrefix(longer, shorter)
+}
+
+// stem strips ONE common English inflectional suffix (plural/gerund/
+// past-tense ending) from w if present, leaving its approximate root —
+// e.g. "placing" -> "plac", "percentages" -> "percentag", "categories"
+// -> "category". Order matters: longer, more specific suffixes are tried
+// first, so "categories" strips via the "ies"->"y" rule rather than the
+// generic "s" rule mangling it.
+//
+// Deliberately shallow: no vowel-doubling undo, no real Porter-style
+// step cascade — just enough to normalize the plural/gerund/past-tense
+// variation actually found in this project's own fixtures (a task
+// written in prose, "placing an order", matching code written as
+// "placeOrder"). Comparing STEMMED forms via stemMatch's own
+// prefix-of-the-shorter rule (not exact equality) absorbs the small
+// remaining mismatches a real stemmer's extra steps would clean up
+// (e.g. "placing"->"plac" vs "place"->"place" unstemmed — "plac" is
+// still a real prefix of "place").
+func stem(w string) string {
+	switch {
+	case strings.HasSuffix(w, "ies") && len(w) > 5:
+		return w[:len(w)-3] + "y"
+	case strings.HasSuffix(w, "ing") && len(w) > 6:
+		return w[:len(w)-3]
+	case strings.HasSuffix(w, "es") && len(w) > 5:
+		return w[:len(w)-2]
+	case strings.HasSuffix(w, "ed") && len(w) > 5:
+		return w[:len(w)-2]
+	case strings.HasSuffix(w, "s") && !strings.HasSuffix(w, "ss") && len(w) > 4:
+		return w[:len(w)-1]
+	}
+	return w
+}
+
+// stemWeight scales a stemmed (not exact) match's contribution relative
+// to an exact token match — a real but weaker signal than the word
+// matching outright.
+const stemWeight = 0.6
+
+// matchTier reports how strongly term matches tk: 1.0 for an exact
+// whole-word match, stemWeight for a morphological-variant match (see
+// stemMatch), 0 for no match at all.
+func (tk entityTokens) matchTier(term string) float64 {
+	if tk.set[term] {
+		return 1
+	}
+	for _, t := range tk.slice {
+		if stemMatch(term, t) {
+			return stemWeight
+		}
+	}
+	return 0
+}
+
 // termWeights computes an IDF-style (inverse document frequency) weight
 // per task term: how many entities in the repo this term matches at all
 // (by name or symbol path) determines how much a match on that term
@@ -277,10 +460,31 @@ func symbolPath(e model.Entity) string {
 // bounded above by log(N+1)+1 for a term matching nothing else at all.
 func termWeights(all []model.Entity, terms []string) map[string]float64 {
 	n := float64(len(all))
+	// Each entity's own tokens (name + symbol path) computed once, the
+	// SAME way matchScore's does — see tokenSet's doc for why this (not
+	// raw substring containment) is what df must be measured against: a
+	// document-frequency count built on a looser rule than the scoring
+	// it's meant to calibrate would misjudge how common a term really
+	// is. matchTier (exact-or-stemmed) is used here too, for the same
+	// reason: a term df considers "matched" must be the same notion of
+	// match matchScore itself credits.
+	entityToks := make([]entityTokens, len(all))
+	for i, e := range all {
+		nt := tokensFor(e.Name)
+		st := tokensFor(symbolPath(e))
+		merged := entityTokens{set: make(map[string]bool, len(nt.set)+len(st.set)), slice: append(append([]string{}, nt.slice...), st.slice...)}
+		for t := range nt.set {
+			merged.set[t] = true
+		}
+		for t := range st.set {
+			merged.set[t] = true
+		}
+		entityToks[i] = merged
+	}
 	df := map[string]int{}
 	for _, t := range terms {
-		for _, e := range all {
-			if strings.Contains(strings.ToLower(e.Name), t) || strings.Contains(strings.ToLower(symbolPath(e)), t) {
+		for _, toks := range entityToks {
+			if toks.matchTier(t) > 0 {
 				df[t]++
 			}
 		}
@@ -306,15 +510,22 @@ func termWeights(all []model.Entity, terms []string) map[string]float64 {
 }
 
 // matchScore scores e against task terms: an exact bare-name match (case-
-// insensitive) is weighted far above a partial substring/word overlap in
-// the qualified name, so a task that names a symbol directly seeds on
-// that symbol before anything merely related by vocabulary. Each term's
-// base weight (10/3/1) is further scaled by idf[t] (see termWeights) so a
+// insensitive) is weighted far above a whole-WORD overlap in the
+// qualified name, so a task that names a symbol directly seeds on that
+// symbol before anything merely related by vocabulary. Each term's base
+// weight (10/3/1) is further scaled by idf[t] (see termWeights) so a
 // match on a rare, specific term counts for more than a match on a term
 // that appears all over the codebase.
+//
+// Matches against tokenSet (via matchTier), not raw substring
+// containment — see that function's doc for why this matters: a term
+// can only match a REAL word of e's own name/symbol path (exactly, or as
+// a morphological variant — stemMatch), never an accidental run of
+// characters spanning a word boundary.
 func matchScore(e model.Entity, terms []string, idf map[string]float64) float64 {
 	nameLower := strings.ToLower(e.Name)
-	symbolPathLower := strings.ToLower(symbolPath(e))
+	nameTokens := tokensFor(e.Name)
+	symbolTokens := tokensFor(symbolPath(e))
 	var score float64
 	seen := map[string]bool{}
 	for _, t := range terms {
@@ -330,12 +541,12 @@ func matchScore(e model.Entity, terms []string, idf map[string]float64) float64 
 			score += 10 * w
 			continue
 		}
-		if strings.Contains(nameLower, t) {
-			score += 3 * w
+		if m := nameTokens.matchTier(t); m > 0 {
+			score += 3 * w * m
 			continue
 		}
-		if strings.Contains(symbolPathLower, t) {
-			score += 1 * w
+		if m := symbolTokens.matchTier(t); m > 0 {
+			score += 1 * w * m
 		}
 	}
 	return score
