@@ -108,20 +108,31 @@ rediscover this later" list.
 - `Entity.Signature` and `Entity.DocSummary` are never populated — the source ladder's
   signature/skeleton rungs read the first source line as a stand-in (`internal/compile`'s
   package doc). A real reconstructed signature string is better long-term.
-- Destructured CJS require with renaming (`const { a: renamed } = require(...)`) — only the
-  shorthand form is handled (`internal/parser/ts/extractor.go`).
-- tsconfig `extends` (config inheritance) and JSONC (comments/trailing commas) are not handled —
-  a malformed/unsupported tsconfig is skipped, not guessed at (`internal/index/tsconfig.go`).
-- Nested calls inside a test callback (`it('...', () => { ... })`) are not attributed to the test
-  entity as `Src` — would need arrow-function callbacks registered as scopes, matching
-  `methodassign`'s existing pattern (`internal/parser/ts/extractor.go`).
+- ~~Destructured CJS require with renaming (`const { a: renamed } = require(...)`) — only the
+  shorthand form is handled~~ **closed**: the renaming form (`pair_pattern`) is now a dedicated
+  query pattern (`internal/parser/ts/queries/entities.scm`'s `import.cjs.stmt3`).
+- ~~tsconfig `extends` (config inheritance) ... not handled~~ **closed**: `loadTSConfig` now
+  follows a relative-path `extends` chain (cycle-guarded), merging per tsconfig's own
+  compilerOptions-level override semantics — a child's own `baseUrl`/`paths` replace the parent's
+  wholesale when present, otherwise the parent's are inherited (`internal/index/tsconfig.go`).
+  JSONC (comments/trailing commas) and a package-specifier `extends` target (needing
+  node_modules resolution) remain unsupported — a malformed/unsupported tsconfig is skipped, not
+  guessed at.
+- ~~Nested calls inside a test callback ... are not attributed to the test entity as `Src`~~
+  **closed**: the test query now captures the trailing callback (`test.callback`), registered in
+  `scopeByStartByte` the same way `methodassign`'s does; `enclosingScope` now also walks through
+  `arrow_function` (`internal/parser/ts/extractor.go`).
 - No export-awareness — every top-level entity is treated as visible/exported; a private helper
   with the same name as a real export in the same file is a false-resolve risk
-  (`internal/resolve/resolve.go`).
+  (`internal/resolve/resolve.go`). Deliberately deferred: closing it properly across all four
+  languages (Go's own exported-vs-unexported casing aside) is a bigger, riskier change than fits
+  this pass — flagged here rather than attempted piecemeal.
 
 ### Resolution (`internal/resolve`)
-- tsconfig path aliases only support single-wildcard patterns (`"@/*": ["src/*"]`) — multi-segment
-  or regex-like patterns are unsupported.
+- tsconfig path aliases only support single-wildcard patterns (`"@/*": ["src/*"]`) — this matches
+  tsconfig's own specification (at most one `*` per pattern is valid there too), so this is not
+  actually a gap relative to real-world tsconfig files, just a note that a malformed
+  multi-wildcard/regex-like pattern in `paths` is ignored rather than guessed at.
 
 ### Language plugin architecture (`internal/resolve`, `internal/index`) — ADR-0011
 - "Plug and play" means architecturally decoupled and independently addable at the source level

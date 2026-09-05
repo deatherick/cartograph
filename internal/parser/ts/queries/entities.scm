@@ -241,6 +241,19 @@
     function: (identifier) @import.cjs.require2
     arguments: (arguments (string (string_fragment) @import.cjs.source)))) @import.cjs.stmt2
 
+; `const { a: renamed } = require('./m');` — the renaming form
+; (pair_pattern), previously a documented gap: only the shorthand form
+; above was handled. key is the module's own exported name; value is the
+; local binding the renamed name introduces.
+(variable_declarator
+  name: (object_pattern
+    (pair_pattern
+      key: (property_identifier) @import.cjs.renamedFrom
+      value: (identifier) @import.cjs.renamedTo))
+  value: (call_expression
+    function: (identifier) @import.cjs.require3
+    arguments: (arguments (string (string_fragment) @import.cjs.source)))) @import.cjs.stmt3
+
 ; --- Re-exports (barrel files): `export * from './x'` and
 ; `export { a, b as c } from './x'`. Both share export_statement's
 ; `source` field; disambiguated in Go by whether an export_clause (named
@@ -262,7 +275,20 @@
 ; dominant Jest/Mocha convention; framework-specific patterns beyond this
 ; (custom test runners) are Phase 7 scope (docs/research/09's "framework
 ; catalog" deferral), not Phase 1.
+;
+; @test.callback (the trailing function/arrow callback, optional so a
+; call with no callback still produces a KindTest entity) is captured so
+; the Go side can register it in scopeByStartByte the same way
+; methodassign's function_expression is — closing a documented gap where
+; a call made INSIDE the test body (`expect(foo()).toBe(1)`) was left
+; unattributed (Ref.Src empty) instead of pointing at the enclosing test.
 (call_expression
   function: (identifier) @test.fn
   arguments: (arguments
-    . (string (string_fragment) @test.name))) @test.call
+    . (string (string_fragment) @test.name)
+    (_)*
+    .
+    [
+      (function_expression) @test.callback
+      (arrow_function) @test.callback
+    ]?)) @test.call

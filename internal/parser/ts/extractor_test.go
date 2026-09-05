@@ -48,10 +48,10 @@ func TestExtract_EntitiesRefsImports(t *testing.T) {
 	}
 
 	wantKinds := map[string]string{
-		"hashPassword":                  "Function",
-		"UserService":                   "Class",
+		"hashPassword": "Function",
+		"UserService":  "Class",
 		"src/services/userService.ts#UserService.register": "Method",
-		"Extra":                         "Interface",
+		"Extra": "Interface",
 	}
 	got := map[string]string{}
 	for _, e := range facts.Entities {
@@ -362,6 +362,33 @@ func TestExtract_CJSRequire_Destructured(t *testing.T) {
 	}
 }
 
+// TestExtract_CJSRequire_DestructuredRenamed closes docs/MVP.md's own
+// "Destructured CJS require with renaming — only the shorthand form is
+// handled" gap.
+func TestExtract_CJSRequire_DestructuredRenamed(t *testing.T) {
+	src := `const { authentication: auth } = require('./auth');`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "a.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, im := range facts.Imports {
+		if im.Source == "./auth" {
+			found = true
+			if im.LocalName != "auth" {
+				t.Errorf("got LocalName %q, want %q (the renamed local binding)", im.LocalName, "auth")
+			}
+			if im.ImportedName != "authentication" {
+				t.Errorf("got ImportedName %q, want %q (the module's own exported name)", im.ImportedName, "authentication")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a renamed destructured require binding, got %+v", facts.Imports)
+	}
+}
+
 func TestExtract_ReExport_Star(t *testing.T) {
 	src := `export * from './userModel';`
 	e := New()
@@ -422,6 +449,43 @@ describe("UserService", () => {
 		if !names[want] {
 			t.Errorf("expected a Test entity named %q, found: %v", want, names)
 		}
+	}
+}
+
+// TestExtract_TestCallback_InnerCallsAttributeToItAsSrc closes a
+// documented gap (queries/entities.scm's test.callback doc): a call made
+// INSIDE an it(...)/test(...) callback must attribute to that KindTest
+// entity as Src, the same scope-registration correctness
+// TestExtract_RouteHandler_InnerCallsAttributeToItAsSrc already checks
+// for route handlers.
+func TestExtract_TestCallback_InnerCallsAttributeToItAsSrc(t *testing.T) {
+	src := `
+it("registers a user", () => {
+  registerUser();
+});
+`
+	e := New()
+	facts, err := e.Extract(context.Background(), "repo", "a.test.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var testID model.EntityID
+	for _, ent := range facts.Entities {
+		if ent.Kind == model.KindTest && ent.Name == "registers a user" {
+			testID = ent.ID
+		}
+	}
+	if testID == "" {
+		t.Fatal("expected to find the 'registers a user' test entity first")
+	}
+	found := false
+	for _, r := range facts.Refs {
+		if r.Target.Name == "registerUser" && r.Src == testID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected registerUser() inside the test callback to attribute Src=%s, refs: %+v", testID, facts.Refs)
 	}
 }
 

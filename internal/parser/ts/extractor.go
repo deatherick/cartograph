@@ -134,6 +134,20 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 			if rent, rid, rok := routeEntityFromMatch(repo, file, src, m); rok {
 				facts.Entities = append(facts.Entities, rent)
 				scopeByStartByte[rent.Anchor.StartByte] = rid
+				continue
+			}
+			// testEntityFromMatch is tried here, in the FIRST pass (moved
+			// from the second pass alongside refsFromMatch), for the same
+			// reason routeEntityFromMatch is: its scope registration below
+			// must be in place before refsFromMatch's second-pass walk
+			// attributes a call made INSIDE the test callback (Ref.Src).
+			if tent, tid, tok := testEntityFromMatch(repo, file, src, m); tok {
+				facts.Entities = append(facts.Entities, tent)
+				if cb := m.captures["test.callback"]; cb != nil {
+					cbStart, _ := cb.ByteRange()
+					scopeByStartByte[cbStart] = tid
+				}
+				continue
 			}
 			continue
 		}
@@ -187,9 +201,6 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 		}
 		if re, ok := reExportFromMatch(m, src); ok {
 			facts.ReExports = append(facts.ReExports, re)
-		}
-		if ent, ok := testEntityFromMatch(repo, file, src, m); ok {
-			facts.Entities = append(facts.Entities, ent)
 		}
 	}
 
@@ -456,7 +467,7 @@ func refsFromMatch(file string, src []byte, m match, scopeByStartByte map[uint]m
 func enclosingScope(n *sitter.Node, scopeByStartByte map[uint]model.EntityID) model.EntityID {
 	for p := n.Parent(); p != nil; p = p.Parent() {
 		switch p.Kind() {
-		case "function_declaration", "method_definition", "function_expression":
+		case "function_declaration", "method_definition", "function_expression", "arrow_function":
 		default:
 			continue
 		}
@@ -483,12 +494,20 @@ func importFromMatch(m match, src []byte) (model.ImportBinding, bool) {
 		if n := m.captures["import.cjs.named"]; n != nil {
 			// `const { a, b } = require('./m')` — one match per
 			// destructured name (mirrors how ESM named imports fire once
-			// per specifier). Only the shorthand form (`{ a }`) is
-			// handled; `{ a: renamed }` is a documented gap (pair_pattern,
-			// not shorthand_property_identifier_pattern) — lower value
-			// than the common case and left for a follow-up.
+			// per specifier).
 			name := text(src, n)
 			return model.ImportBinding{LocalName: name, Source: src0, ImportedName: name}, true
+		}
+		if from := m.captures["import.cjs.renamedFrom"]; from != nil {
+			// `const { a: renamed } = require('./m')` — the renaming
+			// form: LocalName is the binding the code actually uses,
+			// ImportedName is the module's own exported name it resolves
+			// against.
+			to := m.captures["import.cjs.renamedTo"]
+			if to == nil {
+				return model.ImportBinding{}, false
+			}
+			return model.ImportBinding{LocalName: text(src, to), Source: src0, ImportedName: text(src, from)}, true
 		}
 	}
 
@@ -562,21 +581,21 @@ func hasChildOfKind(n *sitter.Node, kind string) bool {
 // testEntityFromMatch recognizes `it('...', ...)` / `test('...', ...)` /
 // `describe('...', ...)` calls with a string-literal first argument as
 // KindTest entities — the dominant Jest/Mocha convention (see
-// queries/entities.scm's test.call pattern doc). Nested calls inside the
-// test callback are not currently attributed to the test entity as Src
-// (a documented Phase 1 gap: it would need arrow_function callbacks
-// registered in scopeByStartByte the same way methodassign's
-// function_expression is, not yet done).
-func testEntityFromMatch(repo, file string, src []byte, m match) (model.Entity, bool) {
+// queries/entities.scm's test.call pattern doc). Called from the FIRST
+// capture pass (not the second, alongside refsFromMatch), so its scope
+// registration (the caller's job, via the returned id and the match's
+// own test.callback capture) is in place before refsFromMatch's second
+// pass attributes a call made INSIDE the test callback as Ref.Src.
+func testEntityFromMatch(repo, file string, src []byte, m match) (model.Entity, model.EntityID, bool) {
 	fnNode := m.captures["test.fn"]
 	nameNode := m.captures["test.name"]
 	callNode := m.captures["test.call"]
 	if fnNode == nil || nameNode == nil || callNode == nil {
-		return model.Entity{}, false
+		return model.Entity{}, "", false
 	}
 	fnName := text(src, fnNode)
 	if fnName != "it" && fnName != "test" && fnName != "describe" {
-		return model.Entity{}, false
+		return model.Entity{}, "", false
 	}
 	name := text(src, nameNode)
 	qualified := file + "#" + name
@@ -589,7 +608,7 @@ func testEntityFromMatch(repo, file string, src []byte, m match) (model.Entity, 
 		Qualified: qualified,
 		Name:      name,
 		Anchor:    anchorFrom(file, src, callNode),
-	}, true
+	}, id, true
 }
 
 // routeEntityFromMatch recognizes an Express-style route/event
