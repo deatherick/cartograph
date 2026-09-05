@@ -117,13 +117,33 @@ func (p *csPolicy) ResolveUnqualifiedImport(idx *Index, file string, im model.Im
 		Reason: "unreachable: a plain `using` directive binds no single local name"}
 }
 
-// FollowImportToMethods: C# has no import-aliasing concept where a
-// same-namespace type's methods would be reached through the import
-// table — that path is handled entirely by SameScopeFiles instead (see
-// resolveByReceiverType's core pipeline). Always ok=false, mirroring
-// lang_go.go.
+// FollowImportToMethods handles C#'s EXTENSION methods (`public static T
+// Foo(this ExtendedType x, ...)`, model.ExtensionMethod's doc) —
+// resolveByReceiverType already tried an ordinary same-class method
+// first (fe.methodsByOwner/SameScopeFiles), so reaching here means
+// receiverType has no such method; an extension method targeting it may
+// still exist, declared in a COMPLETELY UNRELATED class. Real C#
+// requires that class's own namespace to be in scope (via `using`, or
+// the same namespace) for its extension methods to apply — mirrored here
+// by searching exactly the same file set SameScopeFiles already computes
+// (same directory + every `using`-resolved directory), never a
+// repo-wide search, so an extension method in an out-of-scope namespace
+// correctly stays unreachable.
 func (p *csPolicy) FollowImportToMethods(idx *Index, file string, fe *fileEntry, receiverType string) (map[string]model.EntityID, bool) {
-	return nil, false
+	methods := map[string]model.EntityID{}
+	for _, f := range p.SameScopeFiles(idx, file) {
+		sf := idx.files[f]
+		if sf == nil {
+			continue
+		}
+		for name, id := range sf.extensionMethodsByType[receiverType] {
+			methods[name] = id
+		}
+	}
+	if len(methods) == 0 {
+		return nil, false
+	}
+	return methods, true
 }
 
 // ResolveImportTarget exposes resolveImportPath standalone for

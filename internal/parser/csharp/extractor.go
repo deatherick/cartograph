@@ -134,6 +134,27 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 		}
 	}
 
+	// extendedTypeByMethodStartByte marks every method_declaration node
+	// (by start byte) that is an extension method, mapped to the type it
+	// extends (queries/entities.scm's ext.methodnode doc) — collected in
+	// its own pass for the same reason testMethodStartBytes is: the
+	// ext.methodnode match carrying @ext.modifier/@ext.type and the
+	// entity.method match producing the actual KindMethod entity are two
+	// INDEPENDENT query matches for the same underlying node.
+	extendedTypeByMethodStartByte := map[uint]string{}
+	for _, m := range pending {
+		modifier := m.captures["ext.modifier"]
+		typeNode := m.captures["ext.type"]
+		node := m.captures["ext.methodnode"]
+		if modifier == nil || typeNode == nil || node == nil {
+			continue
+		}
+		if isThisModifier(text(src, modifier)) {
+			sb, _ := node.ByteRange()
+			extendedTypeByMethodStartByte[sb] = baseTypeName(src, typeNode)
+		}
+	}
+
 	for _, m := range pending {
 		if n := m.captures["receiver.fieldname"]; n != nil {
 			if t := m.captures["receiver.fieldtype"]; t != nil {
@@ -161,6 +182,13 @@ func (e *Extractor) Extract(ctx context.Context, repo, repoRelativePath string, 
 		facts.Entities = append(facts.Entities, ent)
 		if ent.Kind == model.KindMethod || ent.Kind == model.KindTest {
 			scopeByStartByte[ent.Anchor.StartByte] = id
+		}
+		if ent.Kind == model.KindMethod {
+			if extendedType, ok := extendedTypeByMethodStartByte[ent.Anchor.StartByte]; ok {
+				facts.ExtensionMethods = append(facts.ExtensionMethods, model.ExtensionMethod{
+					EntityID: id, Name: ent.Name, ExtendedType: extendedType,
+				})
+			}
 		}
 	}
 
@@ -253,6 +281,14 @@ func isTestAttribute(attrText string) bool {
 		attrText = attrText[i+1:]
 	}
 	return testAttributeNames[attrText]
+}
+
+// isThisModifier reports whether a parameter modifier's captured text is
+// literally "this" — the only one of the grammar's several parameter
+// modifiers (`this`, `scoped`, `ref`, `in`, `readonly`) that makes a
+// method an extension method. Exact string comparison, not a guess.
+func isThisModifier(modifierText string) bool {
+	return modifierText == "this"
 }
 
 // enclosingTypeName walks up from n looking for the nearest enclosing

@@ -196,8 +196,20 @@ edges) — these are the documented gaps behind that number, not blockers:
   routing-attribute extraction (`[HttpGet]`/`[Route]`) reuses the same attribute-parsing
   machinery but is a distinct follow-up, not done here — it needs the route's own path/verb
   captured from the attribute's arguments, not just its name.
-- No extension-method resolution (`this` as a first parameter) — a call through an extension
-  method never resolves, since the receiver-type tier only searches the receiver's own type.
+- ~~No extension-method resolution~~ **closed**: a method's `this` parameter modifier (`public
+  static T Foo(this ExtendedType x, ...)`) is now captured as a `model.ExtensionMethod` fact
+  (`ext.methodnode` query pattern + `isThisModifier`'s exact check) and indexed by the type it
+  extends, NOT its own declaring class; `FollowImportToMethods` (`internal/resolve/lang_csharp.go`)
+  resolves it only through the same in-scope file set `SameScopeFiles` already computes (same
+  directory + `using`-resolved directories) — matching real C#'s own visibility rule, and only
+  after an ordinary same-class method already failed to match (an instance method always wins
+  over a same-named extension method, verified by a dedicated test). Scoped to a custom
+  (locally-declared) `ExtendedType` only — a built-in type (`this string s`) parses as
+  `predefined_type`, not `identifier`/`generic_name`, and is deliberately not matched, since this
+  project has no locally-indexed entity for `string`/`int`/etc. to resolve to anyway. Not
+  measurably exercised by eShopOnWeb (every extension method there targets an external framework
+  type — `IServiceCollection`, `IUrlHelper`, `string`, ...), but unit- and resolver-tested against
+  a synthetic same-repo case.
 - No partial-class support — a class split across multiple files (rare, but real) has its
   fields/methods indexed per-file, not merged; `fieldTypesByOwner`/`methodsByOwner` only see
   whichever file's own declarations they were built from.
