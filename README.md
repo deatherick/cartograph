@@ -46,10 +46,11 @@ curl -fsSL https://raw.githubusercontent.com/deatherick/cartograph/main/install.
 
 Downloads `ctx`/`ctxd`/`ctxmcp` for your OS/arch (macOS or Linux; no `sudo`, no Go toolchain, no
 cloning this repo) and places them on `PATH` — see
-[Global install](#global-install-and-running-ctxd-as-a-service) below. **No release has been
-published yet** ([ADR-0026](docs/adr/0026-phase9-global-install-and-daemon.md) built the pipeline;
-cutting the first `vX.Y.Z` tag is still the maintainer's own call), so this currently prints a
-clear message and falls back to building from source:
+[Global install](#global-install-and-running-ctxd-as-a-service) below. Backed by a real,
+[published release](https://github.com/deatherick/cartograph/releases) as of `v0.1.0`
+([ADR-0026](docs/adr/0026-phase9-global-install-and-daemon.md)); verified live end-to-end
+(downloaded, extracted, and run) before this note was written. If no release matches your
+OS/arch yet, it prints a clear message and falls back to building from source instead:
 
 ```bash
 git clone https://github.com/deatherick/cartograph.git
@@ -207,9 +208,10 @@ ctx service uninstall   # reverses it cleanly
 
 It starts automatically at login from then on, watching whatever's registered via `ctx project
 add` at any given moment. Windows isn't supported yet. See ADR-0026 for how this is built (one
-file per OS behind a build tag, never a runtime OS check in shared code) and what still needs a
-deliberate go-ahead before it's used for real (cutting an actual release; running the installer
-live on a machine).
+file per OS behind a build tag, never a runtime OS check in shared code). `v0.1.0` has been
+released and `install.sh` verified live end-to-end; actually running `ctx service install` on a
+real machine (registering a real, persistent background service) is still a deliberate,
+per-machine choice for whoever runs it, not something this project does on your behalf.
 
 ### Web UI
 
@@ -292,11 +294,12 @@ The honest list, kept current in [`docs/MVP.md`](docs/MVP.md#consolidated-known-
 - **Receiver-type inference is best-effort.** `obj.method()` resolves when `obj`'s type is
   statically declared (constructor properties, typed fields/variables); a local variable with no
   type annotation does not resolve, and is reported as such, never guessed.
-- **No release has been cut yet.** `install.sh` and the release pipeline
-  ([ADR-0026](docs/adr/0026-phase9-global-install-and-daemon.md)) are built and tested, but no
-  `vX.Y.Z` tag has been pushed — `install.sh` currently falls back to the source-build instructions
-  above. Windows isn't supported for `ctx service install` (macOS/Linux only, matching this
-  project's own CI matrix).
+- **`v0.1.0` is the first release** ([ADR-0026](docs/adr/0026-phase9-global-install-and-daemon.md));
+  `install.sh` has been verified live end-to-end against it. Only macOS (arm64) and Linux (amd64)
+  binaries are published, matching this project's own CI matrix — no Windows support, and no
+  darwin/amd64 (Intel Mac) build yet either.
+  Not every future change gets its own tagged release automatically — cutting one is still a
+  deliberate, separate act (pushing a `vX.Y.Z` tag), not something every merge to `main` does.
 - Full catalog, organized by subsystem: [`docs/MVP.md`](docs/MVP.md).
 
 ## Documentation map

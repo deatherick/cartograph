@@ -140,9 +140,10 @@ implementation record: both concrete shapes this document named for "how `ctx in
 daemon connect" were resolved (polling `projects.json` was chosen over a write-capable HTTP
 endpoint); `ctx service install/uninstall/status` (`internal/sysservice`) implements "daemon as a
 system-level service" for macOS (`launchd`) and Linux (`systemd --user`); `install.sh` +
-`.github/workflows/release.yml` implement "global install." Two things remain deliberately
-undone without a further, separate go-ahead from the user: actually pushing a `vX.Y.Z` release tag
-(the requirements above are built and tested, but no real release has been cut), and actually
-running `ctx service install` on a live machine (every code path is unit-tested with a fake
-command runner, but a live launchd/systemd registration is a real, persistent system change this
-ADR's author did not take unilaterally) — see ADR-0026's own "what still needs a human decision."
+`.github/workflows/release.yml` implement "global install." `v0.1.0` was tagged and released the
+same day, at a further, separate explicit go-ahead from the user — `install.sh` verified live
+end-to-end against the real published release (see ADR-0026's "Update: v0.1.0 released"). One
+thing remains deliberately undone: actually running `ctx service install` on a live machine (every
+code path is unit-tested with a fake command runner, but a live launchd/systemd registration is a
+real, persistent system change this ADR's author did not take unilaterally) — see ADR-0026's own
+"what still needs a human decision."

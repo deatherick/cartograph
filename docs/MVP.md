@@ -326,14 +326,14 @@ Measured at 0.0% bug_rate on a real repo (django-realworld-example-app, 44 files
   5s (add/remove/restart a project with no daemon restart — verified live, not just read from the
   code); `ctx service install/uninstall/status` registers `ctxd` as a real `launchd` user agent
   (macOS) or `systemd --user` unit (Linux), one native mechanism per OS in its own build-tag file
-  (`internal/sysservice`); `install.sh` + `.github/workflows/release.yml` are real and working,
-  tested live against this repo (correctly falls back to a source-build message since no release
-  has been cut yet). Full requirements:
+  (`internal/sysservice`); `install.sh` + `.github/workflows/release.yml` are real and working.
+  **`v0.1.0` was tagged and released at the user's explicit follow-up request** (2026-09-05) —
+  `install.sh` was verified live end-to-end against the real published release (downloaded,
+  extracted, ran). Full requirements:
   [`docs/requirements/phase9-global-install-and-daemon.md`](docs/requirements/phase9-global-install-and-daemon.md).
-  **Two things still need the user's own go-ahead, not built without it**: actually pushing a
-  `vX.Y.Z` tag (which makes `install.sh`'s download path real instead of falling back to source),
-  and actually running `ctx service install` for real on a live machine (registers a real,
-  persistent background service) — see ADR-0026's "what still needs a human decision."
+  **One thing still needs the user's own go-ahead, not done without it**: actually running `ctx
+  service install` for real on a live machine (registers a real, persistent background service) —
+  see ADR-0026's "what still needs a human decision."
 
 ## Immediate next steps, in order
 
@@ -504,7 +504,8 @@ This closes every item in the weighted "easy win" batch (Paths, Quality, Operati
     --user` unit (Linux), one file per OS behind a build tag, not a `runtime.GOOS` switch — the
     exact bug category `edge-case-backlog.md` G3 already catalogued from Grafel's own #6218,
     followed rather than rediscovered. `install.sh` + `.github/workflows/release.yml` are real,
-    tested live against this repo (correctly falls back to a source-build message today, since no
-    release has been cut). Two things deliberately NOT done without the user's own separate
-    go-ahead: pushing an actual `vX.Y.Z` release tag, and running `ctx service install` for real on
-    a live machine (registers a real, persistent background service) — see ADR-0026.
+    tested live against this repo. **Same day, at a separate explicit follow-up request, `v0.1.0`
+    was tagged and released** — `install.sh` verified live end-to-end against the real published
+    release (downloaded `cartograph_darwin_arm64.tar.gz`, extracted, ran `ctx` for real). One thing
+    deliberately NOT done without the user's own separate go-ahead: running `ctx service install`
+    for real on a live machine (registers a real, persistent background service) — see ADR-0026.
