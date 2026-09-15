@@ -29,13 +29,17 @@ import {
   Position,
   useNodesState,
   useEdgesState,
+  useReactFlow,
+  ReactFlowProvider,
   type Node,
   type Edge,
   type NodeProps,
+  type OnNodesChange,
+  type OnEdgesChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
-import { ArrowLeft, Search as SearchIcon, Waypoints, ListTree } from 'lucide-react'
+import { ArrowLeft, Search as SearchIcon, Waypoints, ListTree, X, ChevronUp, ChevronDown } from 'lucide-react'
 import { api, type Entity, type Inspection } from '@/lib/api'
 import { useProject } from '@/lib/project-context'
 import { kindSlot, KIND_LEGEND } from '@/lib/graph-colors'
@@ -51,6 +55,15 @@ interface NodeData {
   label: string
   kind: string
   isCenter: boolean
+  // dimmed/matched are set client-side by the in-canvas node finder
+  // below (NodeFinder) — never refetched, purely a visual overlay on
+  // whatever nodes are already loaded (found missing: the toolbar's own
+  // search re-fetches a whole new neighborhood, which isn't what you
+  // want when you already see the node you're after somewhere in a
+  // 30-node graph, just not AT a glance — "hace falta un buscador dentro
+  // de los nodos").
+  dimmed?: boolean
+  matched?: boolean
   [key: string]: unknown
 }
 
@@ -61,11 +74,13 @@ function EntityNode({ data }: NodeProps) {
   const d = data as unknown as NodeData
   return (
     <div
-      className="rounded-lg border px-3 py-2 shadow-[var(--shadow-1)] bg-surface"
+      className="rounded-lg border px-3 py-2 bg-surface transition-[opacity,box-shadow,border-color] duration-[120ms]"
       style={{
-        borderColor: d.isCenter ? 'var(--accent)' : 'var(--border)',
-        borderWidth: d.isCenter ? 2 : 1,
+        borderColor: d.matched ? 'var(--accent)' : d.isCenter ? 'var(--accent)' : 'var(--border)',
+        borderWidth: d.matched || d.isCenter ? 2 : 1,
         width: NODE_WIDTH,
+        opacity: d.dimmed ? 0.35 : 1,
+        boxShadow: d.matched ? '0 0 0 3px var(--accent-ring), var(--shadow-2)' : 'var(--shadow-1)',
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
@@ -359,21 +374,16 @@ export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initi
         ) : view === 'tree' ? (
           <TreeView inspection={inspection} entitiesById={entitiesRef.current} onSelect={navigateTo} />
         ) : (
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={onNodeClick}
-            nodeTypes={nodeTypes}
-            fitView
-            proOptions={proOptions}
-            colorMode="system"
-          >
-            <Background />
-            <Controls showInteractive={false} />
-            <MiniMap pannable zoomable className="!bg-surface" />
-          </ReactFlow>
+          <ReactFlowProvider>
+            <GraphCanvas
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onNodeClick={onNodeClick}
+              proOptions={proOptions}
+            />
+          </ReactFlowProvider>
         )}
 
         {view === 'graph' && (
@@ -388,6 +398,150 @@ export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initi
         )}
       </div>
     </div>
+  )
+}
+
+// GraphCanvas is the actual React Flow canvas plus the in-canvas node
+// finder — split out from EntityGraphPanel because useReactFlow() (which
+// the finder needs, to pan/zoom to a match) only works inside a
+// <ReactFlowProvider>, and <ReactFlow> itself only PROVIDES that context
+// to its own children, not to whatever renders it — so the finder's own
+// logic has to live in a component nested inside the Provider, not in
+// EntityGraphPanel's own body.
+function GraphCanvas({
+  nodes,
+  edges,
+  onNodesChange,
+  onEdgesChange,
+  onNodeClick,
+  proOptions,
+}: {
+  nodes: Node[]
+  edges: Edge[]
+  onNodesChange: OnNodesChange<Node>
+  onEdgesChange: OnEdgesChange<Edge>
+  onNodeClick: (e: React.MouseEvent, node: Node) => void
+  proOptions: { hideAttribution: boolean }
+}) {
+  const { fitView } = useReactFlow()
+  const [query, setQuery] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
+
+  // Matches are derived purely from the nodes ALREADY loaded — no API
+  // call, no re-fetch, unlike the toolbar's own "center the graph on"
+  // search above. Case-insensitive substring on the node's own label
+  // (its bare Name), the same match rule EntityTable's own search box
+  // uses.
+  const matchIds = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+    return nodes.filter((n) => (n.data as unknown as NodeData).label.toLowerCase().includes(q)).map((n) => n.id)
+  }, [nodes, query])
+
+  const matchSet = useMemo(() => new Set(matchIds), [matchIds])
+  const clampedIndex = matchIds.length > 0 ? activeIndex % matchIds.length : 0
+
+  // Overlay dimmed/matched onto the already-loaded nodes for rendering
+  // only — the underlying `nodes` state (owned by EntityGraphPanel,
+  // shared with onNodesChange's drag/select handling) is never mutated
+  // by the finder.
+  const renderNodes = useMemo(() => {
+    if (!query.trim()) return nodes
+    return nodes.map((n) => ({
+      ...n,
+      data: { ...n.data, dimmed: !matchSet.has(n.id), matched: n.id === matchIds[clampedIndex] } as NodeData,
+    }))
+  }, [nodes, query, matchSet, matchIds, clampedIndex])
+
+  const goToMatch = useCallback(
+    (index: number) => {
+      const id = matchIds[((index % matchIds.length) + matchIds.length) % matchIds.length]
+      if (!id) return
+      fitView({ nodes: [{ id }], duration: 300, padding: 2, maxZoom: 1.2 })
+    },
+    [matchIds, fitView],
+  )
+
+  useEffect(() => {
+    if (matchIds.length > 0) {
+      setActiveIndex(0)
+      goToMatch(0)
+    }
+    // Only re-run when the QUERY changes (a fresh search should jump to
+    // its first match) — not on every `goToMatch` identity change, which
+    // would fight the user's own up/down cycling below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query])
+
+  function cycle(delta: number) {
+    if (matchIds.length === 0) return
+    const next = clampedIndex + delta
+    setActiveIndex(next)
+    goToMatch(next)
+  }
+
+  return (
+    <>
+      <ReactFlow
+        nodes={renderNodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onNodeClick={onNodeClick}
+        nodeTypes={nodeTypes}
+        fitView
+        proOptions={proOptions}
+        colorMode="system"
+      >
+        <Background />
+        <Controls showInteractive={false} />
+        <MiniMap pannable zoomable className="!bg-surface" />
+      </ReactFlow>
+
+      {/* The in-canvas node finder — deliberately separate from the
+          toolbar's "center the graph on" search above the canvas: that
+          one re-fetches a whole new neighborhood; this one only
+          highlights/pans to a node ALREADY on screen. */}
+      <div className="absolute top-3 right-3 z-10 flex items-center gap-1 bg-surface border border-border rounded-md shadow-[var(--shadow-2)] px-2 py-1.5">
+        <SearchIcon size={13} className="text-text-4 shrink-0" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') cycle(e.shiftKey ? -1 : 1)
+            if (e.key === 'Escape') setQuery('')
+          }}
+          placeholder="Find a node on screen…"
+          className="h-6 w-40 bg-transparent text-sm text-text placeholder:text-text-4 focus:outline-none"
+        />
+        {query.trim() && (
+          <>
+            <span className="text-text-4 text-xs tabular-nums shrink-0 mono">
+              {matchIds.length > 0 ? `${clampedIndex + 1}/${matchIds.length}` : '0/0'}
+            </span>
+            <button
+              className="text-text-3 hover:text-text disabled:opacity-30 shrink-0"
+              disabled={matchIds.length === 0}
+              onClick={() => cycle(-1)}
+              title="Previous match (Shift+Enter)"
+            >
+              <ChevronUp size={13} />
+            </button>
+            <button
+              className="text-text-3 hover:text-text disabled:opacity-30 shrink-0"
+              disabled={matchIds.length === 0}
+              onClick={() => cycle(1)}
+              title="Next match (Enter)"
+            >
+              <ChevronDown size={13} />
+            </button>
+            <button className="text-text-3 hover:text-text shrink-0" onClick={() => setQuery('')} title="Clear (Esc)">
+              <X size={13} />
+            </button>
+          </>
+        )}
+      </div>
+    </>
   )
 }
 
