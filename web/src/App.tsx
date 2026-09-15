@@ -4,6 +4,7 @@ import { Overview } from '@/pages/Overview'
 import { GraphPage } from '@/pages/GraphPage'
 import { ImpactPage } from '@/pages/ImpactPage'
 import { DuplicatesPage } from '@/pages/DuplicatesPage'
+import { SequencePage } from '@/pages/SequencePage'
 import { ProjectProvider } from '@/lib/project-context'
 
 const router = createBrowserRouter([
@@ -14,6 +15,7 @@ const router = createBrowserRouter([
       { path: '/graph', element: <GraphPage /> },
       { path: '/impact', element: <ImpactPage /> },
       { path: '/duplicates', element: <DuplicatesPage /> },
+      { path: '/sequence', element: <SequencePage /> },
     ],
   },
 ])

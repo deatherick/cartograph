@@ -7,7 +7,7 @@
 // therefore always visible now; only the brand mark + a hairline border
 // remain from the previous hover-expand version.
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Waypoints, Target, Copy, Sun, Moon } from 'lucide-react'
+import { LayoutDashboard, Waypoints, Target, Copy, Route, Sun, Moon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/lib/theme'
 
@@ -16,6 +16,9 @@ const SCREENS = [
   { to: '/graph', label: 'Graph', Icon: Waypoints },
   { to: '/impact', label: 'Git diff impact', Icon: Target },
   { to: '/duplicates', label: 'Duplicates', Icon: Copy },
+  // Exploratory (docs/adr/0030) — a real resolved path drawn as a
+  // sequence diagram, not merged/promoted to "done" status yet.
+  { to: '/sequence', label: 'Sequence', Icon: Route },
 ]
 
 function rowClass(active: boolean) {

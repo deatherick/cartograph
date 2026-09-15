@@ -62,6 +62,18 @@ export interface ImpactResult {
   CoveringTests: Entity[] | null
 }
 
+// PathResult mirrors internal/service.PathResult — the real, resolved
+// hop-by-hop chain `ctx path`/`context_path` (MCP) already return. Every
+// hop is a real edge this project's resolver actually bound, never an
+// authored/guessed relationship (see docs/adr's Sequence-view
+// exploration for why that distinction matters here specifically).
+export interface PathResult {
+  From: Entity
+  To: Entity
+  Path: RelatedEntity[] | null // From -> ... -> To, in order; null/empty if !Found
+  Found: boolean
+}
+
 export interface GitDiffImpact {
   ChangedEntities: Entity[] | null
   ImpactedEntities: Entity[] | null
@@ -204,6 +216,14 @@ export const api = {
   similar: (project: string, name: string, file = '') =>
     getJSON<{ match: Entity; pairs: PairWithEntities[] }>(
       withProject(`/api/similar?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`, project),
+    ),
+  path: (project: string, from: string, to: string, fromFile = '', toFile = '') =>
+    getJSON<PathResult>(
+      withProject(
+        `/api/path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` +
+          `&fromFile=${encodeURIComponent(fromFile)}&toFile=${encodeURIComponent(toFile)}`,
+        project,
+      ),
     ),
   decide: (project: string, nameA: string, fileA: string, nameB: string, fileB: string, decision: Decision) =>
     postJSON<{ ok: boolean }>(

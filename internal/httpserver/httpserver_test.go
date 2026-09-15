@@ -175,6 +175,47 @@ func TestHTTPServer_Impact(t *testing.T) {
 	}
 }
 
+func TestHTTPServer_Path(t *testing.T) {
+	srv := setup(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/path?from=helper&to=greet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d", res.StatusCode)
+	}
+	var got service.PathResult
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Found {
+		t.Fatalf("expected a path from helper to greet, got %+v", got)
+	}
+	if got.From.Name != "helper" || got.To.Name != "greet" {
+		t.Fatalf("got From=%q To=%q, want helper/greet", got.From.Name, got.To.Name)
+	}
+	if len(got.Path) != 1 || got.Path[0].Entity.Name != "greet" {
+		t.Fatalf("expected a single-hop path landing on greet, got %+v", got.Path)
+	}
+}
+
+func TestHTTPServer_Path_MissingParams(t *testing.T) {
+	srv := setup(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/path?from=helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400 for a missing ?to=", res.StatusCode)
+	}
+}
+
 func TestHTTPServer_Source(t *testing.T) {
 	srv := setup(t)
 	defer srv.Close()

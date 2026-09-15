@@ -336,6 +336,31 @@ func New(svc *service.Service, registry *ProjectRegistry) http.Handler {
 		writeJSON(w, result)
 	})
 
+	// /api/path — thin adapter over svc.Path, exactly the same
+	// service.PathResult the CLI (`ctx path`) and MCP (`context_path`)
+	// already render (internal/render.Path) — added to explore a
+	// Sequence-diagram view built on real, deterministic hop data
+	// (docs/adr, the Observatory-inspired exploration branch): each hop
+	// is a real resolved edge, never an authored/guessed relationship.
+	mux.HandleFunc("/api/path", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
+		from := r.URL.Query().Get("from")
+		to := r.URL.Query().Get("to")
+		if from == "" || to == "" {
+			http.Error(w, "missing ?from= and/or ?to=", http.StatusBadRequest)
+			return
+		}
+		result, err := svc.Path(p.Root, p.Repo, from, r.URL.Query().Get("fromFile"), to, r.URL.Query().Get("toFile"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, result)
+	})
+
 	mux.HandleFunc("/api/source", func(w http.ResponseWriter, r *http.Request) {
 		p, ok := resolveProject(w, r)
 		if !ok {
