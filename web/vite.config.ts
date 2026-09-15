@@ -19,6 +19,17 @@ export default defineConfig({
     },
   },
   server: {
+    // Pinned, not left to Vite's own default-then-auto-increment
+    // behavior: with no explicit port, `npm run dev` silently picks
+    // 5173, or the next free port after that if something (e.g. a
+    // leftover dev server from an earlier session) is already listening
+    // on it — a real, recurring annoyance ("no me gusta que cambie
+    // siempre"), not a hypothetical one. `strictPort: true` turns that
+    // silent drift into a clear, actionable startup error instead
+    // ("Port 5173 is already in use") — the fix is "free the port",
+    // never "wonder which port it landed on this time".
+    port: 5173,
+    strictPort: true,
     // In `npm run dev`, proxy API calls to a real ctxd instance (started
     // separately, e.g. `./bin/ctxd --web 127.0.0.1:7420 <path>`) so the
     // Vite dev server only ever serves the frontend, never duplicates the
