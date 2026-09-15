@@ -95,7 +95,16 @@ func (s *Service) Find(root, repo, name string) ([]model.Entity, error) {
 		return nil, err
 	}
 	byQualified := strings.Contains(name, "#")
-	var out []model.Entity
+	// []model.Entity{}, not "var out []model.Entity": a nil slice
+	// encodes to JSON `null`, and the Web UI's api.find is typed
+	// Entity[] (never Entity[] | null) — onSearchSubmit calls
+	// matches.length straight on the response. A real crash this caused,
+	// live: "Cannot read properties of null (reading 'length')" on any
+	// search with zero exact matches, since `null.length` throws before
+	// the existing "No entity found" handling ever runs. An empty,
+	// non-nil slice always encodes to `[]`, matching what the frontend's
+	// type already promises.
+	out := []model.Entity{}
 	for _, e := range snap.All() {
 		if (byQualified && e.Qualified == name) || (!byQualified && e.Name == name) {
 			out = append(out, e)

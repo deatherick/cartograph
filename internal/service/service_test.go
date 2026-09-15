@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -306,5 +307,41 @@ func TestService_Suggest_EmptyQuery_ReturnsNothing(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected no matches for a blank query, got %+v", got)
+	}
+}
+
+// TestService_Find_NoMatches_ReturnsEmptySliceNotNil guards a real crash
+// found live: Find used to return a nil slice on zero matches, which
+// encodes to JSON `null` — the Web UI's api.find is typed Entity[] (never
+// nullable) and calls matches.length straight on the response, so a
+// search with zero exact matches crashed with "Cannot read properties of
+// null (reading 'length')" before the existing "No entity found" handling
+// ever ran. json.Marshal is the one place this distinction actually
+// matters (Go itself treats nil and empty slices interchangeably for
+// len()/range), so assert on the marshaled bytes, not just len(got).
+func TestService_Find_NoMatches_ReturnsEmptySliceNotNil(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.ts"), []byte("export function a(): void {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := New()
+	repo := RepoName(root)
+	if _, err := svc.Index(t.Context(), root, repo); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	got, err := svc.Find(root, repo, "doesNotExist")
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected a non-nil empty slice, got nil (would encode to JSON null)")
+	}
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "[]" {
+		t.Fatalf("expected Find's zero-match result to marshal to \"[]\", got %q", b)
 	}
 }
