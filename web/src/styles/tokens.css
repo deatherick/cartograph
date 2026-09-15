@@ -1,114 +1,342 @@
 /* ============================================================
    Cartograph — design tokens.
 
-   Adapted from Grafel's webui-v2 design tokens (MIT License,
-   Copyright (c) 2026 Jorge Cajas — https://github.com/cajasmota/grafel,
-   file src/styles/tokens.css), per docs/adr/0002-grafel-reuse-protocol.md
-   and docs/adr/0015-react-web-ui.md: the user's own reuse-scope decision
-   for the VISUAL/UI layer specifically (never this project's core
-   parsing/resolving/graph engine, which remains independently built).
-   See NOTICE.md for the full attribution record.
+   Three-layer contract (primitives → semantic → theme), the same
+   architecture documented in Netchex Observatory's own internal field
+   guide as the reusable mechanism behind its UI kit — ported here
+   deliberately (this project's own redesign decision, not a Grafel
+   carryover): the layer split itself and the naming DISCIPLINE are the
+   asset; the actual color values below are Cartograph's own, chosen
+   fresh for this project, not any other project's brand.
 
-   Trimmed from the original: the "warm" palette variant (Cartograph
-   ships one theme family, not a picker) and animation keyframes tied to
-   Grafel-only features (index wizard progress, insight-glow, flow
-   replay) were removed — everything else (the token values themselves,
-   the light/dark palette, the accessible pastel categorical scale, the
-   scrollbar/skeleton primitives) is unchanged.
+     Layer 1 — primitives   (--c-*)   raw hex ramps, no meaning attached
+     Layer 2 — semantic     (--bg,    the CONTRACT. Every component only
+                             --text,  ever reads a layer-2 name — never a
+                             etc.)    primitive, never a literal hex.
+     Layer 3 — theme        [data-theme] blocks re-point layer-2 names at
+                             different layer-1 primitives. Adding a theme
+                             means adding one block here — zero component
+                             changes, because nothing outside this file
+                             ever names a primitive directly.
 
-   Light = default. Dark via [data-theme="dark"].
+   Layer 2's own NAMES are unchanged from this project's prior tokens.css
+   (still lifted from Grafel's webui-v2, MIT License — see NOTICE.md) on
+   purpose: every component already consumes them through app.css's
+   Tailwind bridge (`bg-surface`, `text-text-2`, ...), and renaming a
+   contract that many files already depend on for no functional gain
+   would be pure, avoidable risk. What changed is what FEEDS those names
+   (real primitives now, not a hex literal per theme block) and the
+   values themselves — richer shadow/radius scale, a second accent hue,
+   real motion tokens.
+
+   Light = default. Dark via [data-theme="dark"] (or OS preference).
+   ============================================================ */
+
+:root {
+  /* ============================================================
+     LAYER 1 — PRIMITIVES. Raw ramps, no semantic meaning. Only
+     layer 2 (below) is allowed to reference these.
+     ============================================================ */
+
+  /* Slate — the cool, neutral base both themes are built from. */
+  --c-slate-0:    #ffffff;
+  --c-slate-50:   #f7f8fa;
+  --c-slate-100:  #eef1f5;
+  --c-slate-150:  #e8ebf0;
+  --c-slate-200:  #e4e7ec;
+  --c-slate-250:  #dde1e7;
+  --c-slate-300:  #cdd2da;
+  --c-slate-400:  #94a3b8;
+  --c-slate-500:  #64748b;
+  --c-slate-600:  #475569;
+  --c-slate-700:  #334155;
+  --c-slate-850:  #1a1f2b;
+  --c-slate-875:  #161b25;
+  --c-slate-900:  #0f172a;
+  --c-slate-925:  #0d1119;
+  --c-slate-950:  #0b0e15;
+
+  /* Ink — the dark-theme surface ramp (deeper and slightly warmer than
+     a pure desaturated slate, so dark mode reads as its own considered
+     surface, not "slate with the lights off"). */
+  --c-ink-950: #0f131c;
+  --c-ink-900: #141923;
+  --c-ink-850: #1a1f2b;
+  --c-ink-800: #20262f;
+  --c-ink-750: #262d38;
+  --c-ink-700: #2b323f;
+  --c-ink-600: #34394a;
+
+  /* Accent — sky/cyan, Cartograph's own primary identity color
+     (exploration, links, primary actions). */
+  --c-sky-300: #7dd3fc;
+  --c-sky-400: #6cb8d9;
+  --c-sky-500: #38bdf8;
+  --c-sky-600: #0ea5e9;
+  --c-sky-700: #0284c7;
+  --c-sky-800: #075985;
+
+  /* Accent2 — violet, a second, cooler identity color reserved for
+     pattern-matching/similarity signal (the Duplicates engine's own
+     "this looks like that" territory) so it never competes with the
+     primary sky accent used for navigation/actions. */
+  --c-violet-300: #c4b5fd;
+  --c-violet-400: #b79df0;
+  --c-violet-500: #a78bfa;
+  --c-violet-600: #8a6ee0;
+  --c-violet-700: #7c5fd6;
+
+  /* Status ramp — deliberately separate hues from both accents, so a
+     warning is never "the brand color, but orange". */
+  --c-green-300:  #86e0ae;
+  --c-green-500:  #10b981;
+  --c-green-600:  #059669;
+  --c-green-700:  #047857;
+  --c-amber-300:  #fcd34d;
+  --c-amber-500:  #f59e0b;
+  --c-amber-600:  #d97706;
+  --c-amber-700:  #b45309;
+  --c-red-300:    #fca5a5;
+  --c-red-500:    #ef4444;
+  --c-red-600:    #dc2626;
+  --c-red-700:    #b91c1c;
+  --c-indigo-400: #8189c4;
+  --c-indigo-500: #6366f1;
+  --c-indigo-600: #4f46e5;
+
+  /* Categorical pastel ramp (repo/kind chips) — unchanged in spirit from
+     the prior tokens.css, kept here as primitives so the ink variants
+     stay derivable rather than hand-tuned twice. */
+  --c-pastel-1:  #a5cde3; --c-pastel-1-ink:  #366f8f;
+  --c-pastel-2:  #b3dec3; --c-pastel-2-ink:  #40765b;
+  --c-pastel-3:  #fac8a0; --c-pastel-3-ink:  #965d2c;
+  --c-pastel-4:  #f0b1bd; --c-pastel-4-ink:  #9b5266;
+  --c-pastel-5:  #cdb9e5; --c-pastel-5-ink:  #735ba7;
+  --c-pastel-6:  #efd99a; --c-pastel-6-ink:  #816928;
+  --c-pastel-7:  #b0d3b3; --c-pastel-7-ink:  #4b734f;
+  --c-pastel-8:  #f4bfca; --c-pastel-8-ink:  #96586b;
+  --c-pastel-9:  #b8c0e0; --c-pastel-9-ink:  #59659e;
+  --c-pastel-10: #f7caa3; --c-pastel-10-ink: #8c632f;
+
+  --c-pastel-1-dk:  #6f9bb3; --c-pastel-1-dk-ink:  #95c1d9;
+  --c-pastel-2-dk:  #7da689; --c-pastel-2-dk-ink:  #a4cfb0;
+  --c-pastel-3-dk:  #c4956d; --c-pastel-3-dk-ink:  #e8b893;
+  --c-pastel-4-dk:  #b8838f; --c-pastel-4-dk-ink:  #dcaab5;
+  --c-pastel-5-dk:  #9686b3; --c-pastel-5-dk-ink:  #bcabd9;
+  --c-pastel-6-dk:  #b8a565; --c-pastel-6-dk-ink:  #dcc88b;
+  --c-pastel-7-dk:  #82a384; --c-pastel-7-dk-ink:  #a9caaa;
+  --c-pastel-8-dk:  #c08699; --c-pastel-8-dk-ink:  #e1aabb;
+  --c-pastel-9-dk:  #8a91b3; --c-pastel-9-dk-ink:  #b1b8d9;
+  --c-pastel-10-dk: #c4986f; --c-pastel-10-dk-ink: #e8be93;
+
+  /* One 4px unit; every spacing step below is a clean multiple of it. */
+  --unit: 4px;
+}
+
+/* ============================================================
+   LAYER 2 — SEMANTIC CONTRACT. Every component reads ONLY from
+   here. Layer 3 (theme blocks, below) re-points these at
+   different layer-1 primitives; nothing else ever changes.
    ============================================================ */
 
 :root,
 [data-theme="light"] {
-  /* -- Surfaces (cool slate base) -- */
-  --bg:            #f7f8fa;   /* very subtle cool off-white */
-  --bg-soft:       #eef1f5;   /* sidebar / subtle surfaces */
-  --surface:       #ffffff;   /* cards, panels */
-  --surface-2:     #f3f5f8;   /* hover for surface */
-  --surface-3:     #e8ebf0;   /* pressed / active */
+  color-scheme: light;
+
+  /* -- Surfaces -- */
+  --bg:            var(--c-slate-50);
+  --bg-soft:       var(--c-slate-100);
+  --surface:       var(--c-slate-0);
+  --surface-2:     var(--c-slate-100);
+  --surface-3:     var(--c-slate-150);
   --overlay:       rgba(255, 255, 255, 0.82);
 
   /* -- Borders -- */
-  --border:        #e4e7ec;
-  --border-strong: #cdd2da;
-  --border-soft:   #edf0f4;
+  --border:        var(--c-slate-200);
+  --border-strong: var(--c-slate-300);
+  --border-soft:   var(--c-slate-100);
 
-  /* -- Text (slate scale) -- */
-  --text:          #0f172a;   /* slate-900 */
-  --text-2:        #334155;   /* slate-700 */
-  --text-3:        #64748b;   /* slate-500 */
-  --text-4:        #94a3b8;   /* slate-400 */
+  /* -- Text -- */
+  --text:          var(--c-slate-900);
+  --text-2:        var(--c-slate-700);
+  --text-3:        var(--c-slate-500);
+  --text-4:        var(--c-slate-400);
   --text-inverse:  #f8fafc;
 
-  /* -- Accent (sky cyan, tunable via Tweaks) -- */
-  --accent:        #0ea5e9;
+  /* -- Accent (primary — navigation, links, primary actions) -- */
+  --accent:        var(--c-sky-600);
   --accent-soft:   #e0f2fe;
-  --accent-strong: #0284c7;
+  --accent-strong: var(--c-sky-700);
   --accent-text:   #ffffff;
   --accent-ring:   rgba(14, 165, 233, 0.24);
 
+  /* -- Accent2 (pattern/similarity signal — Duplicates engine only) -- */
+  --accent2:       var(--c-violet-600);
+  --accent2-soft:  #efeafb;
+  --accent2-strong: var(--c-violet-700);
+
   /* -- Status -- */
-  --success:       #10b981;
+  --success:       var(--c-green-600);
   --success-soft:  #d1fae5;
-  --warning:       #f59e0b;
+  --warning:       var(--c-amber-600);
   --warning-soft:  #fef3c7;
-  --danger:        #ef4444;
+  --danger:        var(--c-red-600);
   --danger-soft:   #fee2e2;
-  --info:          #6366f1;
+  --info:          var(--c-indigo-500);
   --info-soft:     #e0e7ff;
 
-  /* -- Pastel categorical (community / repo colors) -- */
-  --pastel-1:  #a5cde3;   /* sky      */
-  --pastel-2:  #b3dec3;   /* mint     */
-  --pastel-3:  #fac8a0;   /* peach    */
-  --pastel-4:  #f0b1bd;   /* rose     */
-  --pastel-5:  #cdb9e5;   /* lavender */
-  --pastel-6:  #efd99a;   /* butter   */
-  --pastel-7:  #b0d3b3;   /* sage     */
-  --pastel-8:  #f4bfca;   /* blush    */
-  --pastel-9:  #b8c0e0;   /* cornflower */
-  --pastel-10: #f7caa3;   /* apricot  */
+  /* -- Pastel categorical (kind / repo chips) -- */
+  --pastel-1: var(--c-pastel-1);   --pastel-1-ink: var(--c-pastel-1-ink);
+  --pastel-2: var(--c-pastel-2);   --pastel-2-ink: var(--c-pastel-2-ink);
+  --pastel-3: var(--c-pastel-3);   --pastel-3-ink: var(--c-pastel-3-ink);
+  --pastel-4: var(--c-pastel-4);   --pastel-4-ink: var(--c-pastel-4-ink);
+  --pastel-5: var(--c-pastel-5);   --pastel-5-ink: var(--c-pastel-5-ink);
+  --pastel-6: var(--c-pastel-6);   --pastel-6-ink: var(--c-pastel-6-ink);
+  --pastel-7: var(--c-pastel-7);   --pastel-7-ink: var(--c-pastel-7-ink);
+  --pastel-8: var(--c-pastel-8);   --pastel-8-ink: var(--c-pastel-8-ink);
+  --pastel-9: var(--c-pastel-9);   --pastel-9-ink: var(--c-pastel-9-ink);
+  --pastel-10: var(--c-pastel-10); --pastel-10-ink: var(--c-pastel-10-ink);
 
-  /* ink = chip text. Darkened so foreground clears WCAG AA (~4.5:1) over the
-     pastel @28%-over-surface chip background in light theme (issue: repo-chip
-     contrast). Each retains its hue so chips stay per-repo distinct. */
-  --pastel-1-ink:  #366f8f;   /* 4.77:1 */
-  --pastel-2-ink:  #40765b;   /* 4.77:1 */
-  --pastel-3-ink:  #965d2c;   /* 4.79:1 */
-  --pastel-4-ink:  #9b5266;   /* 4.76:1 */
-  --pastel-5-ink:  #735ba7;   /* 4.75:1 */
-  --pastel-6-ink:  #816928;   /* 4.80:1 */
-  --pastel-7-ink:  #4b734f;   /* 4.76:1 */
-  --pastel-8-ink:  #96586b;   /* 4.75:1 */
-  --pastel-9-ink:  #59659e;   /* 4.76:1 */
-  --pastel-10-ink: #8c632f;   /* 4.78:1 */
-
-  /* Exception/error node ink (#4556). The danger-tinted node body washes
-     --danger @22% over surface (≈ #f9d0d0 in light); this darkened red clears
-     WCAG AA as the pill text + border accent over that wash. Hue matches the
-     red THROWS edge so a thrown error reads consistently across node + edge. */
-  --exception-ink: #b91c1c;   /* 4.9:1 over the @22% light wash */
+  /* Exception/error node ink (#4556). Darkened so foreground clears WCAG
+     AA over the --danger @22%-over-surface wash. */
+  --exception-ink: var(--c-red-700);
 
   /* -- Skeleton / loading placeholders -- */
-  --skeleton-base:      #e2e6ed;   /* noticeably darker than surface-2 (#f3f5f8) */
-  --skeleton-highlight: #edf0f5;   /* shimmer highlight — lighter band */
+  --skeleton-base:      var(--c-slate-150);
+  --skeleton-highlight: #edf0f5;
 
   /* -- Graph canvas -- */
-  --canvas-bg:        #f7f8fa;
+  --canvas-bg:        var(--c-slate-50);
   --canvas-grid:      rgba(15, 23, 42, 0.045);
   --edge-color:       rgba(15, 23, 42, 0.14);
   --edge-color-hi:    rgba(14, 165, 233, 0.65);
   --node-stroke:      rgba(15, 23, 42, 0.18);
   --node-stroke-hi:   rgba(14, 165, 233, 1);
 
-  /* -- Elevation -- */
-  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-2: 0 2px 8px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-3: 0 12px 32px -8px rgba(15, 23, 42, 0.18), 0 4px 12px rgba(15, 23, 42, 0.06);
-  --shadow-4: 0 24px 64px -16px rgba(15, 23, 42, 0.22), 0 8px 24px rgba(15, 23, 42, 0.08);
+  /* -- Elevation. A shade richer than before (a second ambient layer),
+     the shape that made Observatory's own cards read as genuinely
+     "lifted" rather than just bordered. -- */
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-2: 0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 16px -6px rgba(15, 23, 42, 0.10);
+  --shadow-3: 0 2px 4px rgba(15, 23, 42, 0.05), 0 12px 32px -8px rgba(15, 23, 42, 0.16);
+  --shadow-4: 0 4px 8px rgba(15, 23, 42, 0.06), 0 24px 64px -16px rgba(15, 23, 42, 0.20);
+}
 
-  /* -- Radii -- */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:            var(--c-ink-950);
+  --bg-soft:       var(--c-ink-900);
+  --surface:       var(--c-ink-850);
+  --surface-2:     var(--c-ink-800);
+  --surface-3:     var(--c-ink-750);
+  --overlay:       rgba(20, 25, 35, 0.85);
+
+  --border:        var(--c-ink-700);
+  --border-strong: var(--c-ink-600);
+  --border-soft:   var(--c-ink-900);
+
+  --text:          #d3d8e0;
+  --text-2:        #9aa3b3;
+  --text-3:        #6b7385;
+  --text-4:        #464d5c;
+  --text-inverse:  var(--c-ink-950);
+
+  --accent:        var(--c-sky-400);
+  --accent-soft:   #102531;
+  --accent-strong: var(--c-sky-300);
+  --accent-text:   #0a141d;
+  --accent-ring:   rgba(108, 184, 217, 0.26);
+
+  --accent2:       var(--c-violet-400);
+  --accent2-soft:  #241d3a;
+  --accent2-strong: var(--c-violet-300);
+
+  --success:       #5fb88a;
+  --success-soft:  #0d2419;
+  --warning:       #d5a866;
+  --warning-soft:  #251a07;
+  --danger:        #d97c7c;
+  --danger-soft:   #28100f;
+  --info:          var(--c-indigo-400);
+  --info-soft:     #181a2f;
+
+  --pastel-1: var(--c-pastel-1-dk);   --pastel-1-ink: var(--c-pastel-1-dk-ink);
+  --pastel-2: var(--c-pastel-2-dk);   --pastel-2-ink: var(--c-pastel-2-dk-ink);
+  --pastel-3: var(--c-pastel-3-dk);   --pastel-3-ink: var(--c-pastel-3-dk-ink);
+  --pastel-4: var(--c-pastel-4-dk);   --pastel-4-ink: var(--c-pastel-4-dk-ink);
+  --pastel-5: var(--c-pastel-5-dk);   --pastel-5-ink: var(--c-pastel-5-dk-ink);
+  --pastel-6: var(--c-pastel-6-dk);   --pastel-6-ink: var(--c-pastel-6-dk-ink);
+  --pastel-7: var(--c-pastel-7-dk);   --pastel-7-ink: var(--c-pastel-7-dk-ink);
+  --pastel-8: var(--c-pastel-8-dk);   --pastel-8-ink: var(--c-pastel-8-dk-ink);
+  --pastel-9: var(--c-pastel-9-dk);   --pastel-9-ink: var(--c-pastel-9-dk-ink);
+  --pastel-10: var(--c-pastel-10-dk); --pastel-10-ink: var(--c-pastel-10-dk-ink);
+
+  --exception-ink: #f0a8a8;
+
+  --skeleton-base:      #2a3140;
+  --skeleton-highlight: #333d4e;
+
+  --canvas-bg:        var(--c-ink-950);
+  --canvas-grid:      rgba(211, 216, 224, 0.04);
+  --edge-color:       rgba(211, 216, 224, 0.10);
+  --edge-color-hi:    rgba(108, 184, 217, 0.55);
+  --node-stroke:      rgba(211, 216, 224, 0.16);
+  --node-stroke-hi:   rgba(108, 184, 217, 0.95);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 20px -6px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 2px 4px rgba(0, 0, 0, 0.4), 0 12px 32px -8px rgba(0, 0, 0, 0.65);
+  --shadow-4: 0 4px 8px rgba(0, 0, 0, 0.45), 0 24px 64px -16px rgba(0, 0, 0, 0.8);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg:            var(--c-ink-950);
+    --bg-soft:       var(--c-ink-900);
+    --surface:       var(--c-ink-850);
+    --surface-2:     var(--c-ink-800);
+    --surface-3:     var(--c-ink-750);
+    --overlay:       rgba(20, 25, 35, 0.85);
+    --border:        var(--c-ink-700);
+    --border-strong: var(--c-ink-600);
+    --border-soft:   var(--c-ink-900);
+    --text:          #d3d8e0;
+    --text-2:        #9aa3b3;
+    --text-3:        #6b7385;
+    --text-4:        #464d5c;
+    --text-inverse:  var(--c-ink-950);
+    --accent:        var(--c-sky-400);
+    --accent-soft:   #102531;
+    --accent-strong: var(--c-sky-300);
+    --accent-text:   #0a141d;
+    --accent-ring:   rgba(108, 184, 217, 0.26);
+    --accent2:       var(--c-violet-400);
+    --accent2-soft:  #241d3a;
+    --accent2-strong: var(--c-violet-300);
+    --success:       #5fb88a; --success-soft: #0d2419;
+    --warning:       #d5a866; --warning-soft: #251a07;
+    --danger:        #d97c7c; --danger-soft:  #28100f;
+    --info:          var(--c-indigo-400); --info-soft: #181a2f;
+    --exception-ink: #f0a8a8;
+    --skeleton-base:      #2a3140;
+    --skeleton-highlight: #333d4e;
+    --canvas-bg:        var(--c-ink-950);
+    --canvas-grid:      rgba(211, 216, 224, 0.04);
+    --edge-color:       rgba(211, 216, 224, 0.10);
+    --edge-color-hi:    rgba(108, 184, 217, 0.55);
+    --node-stroke:      rgba(211, 216, 224, 0.16);
+    --node-stroke-hi:   rgba(108, 184, 217, 0.95);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 20px -6px rgba(0, 0, 0, 0.5);
+    --shadow-3: 0 2px 4px rgba(0, 0, 0, 0.4), 0 12px 32px -8px rgba(0, 0, 0, 0.65);
+    --shadow-4: 0 4px 8px rgba(0, 0, 0, 0.45), 0 24px 64px -16px rgba(0, 0, 0, 0.8);
+  }
+}
+
+:root {
+  /* -- Radii — five choices, not one border-radius everywhere -- */
   --r-xs: 4px;
   --r-sm: 6px;
   --r-md: 8px;
@@ -117,7 +345,7 @@
   --r-2xl: 20px;
   --r-full: 9999px;
 
-  /* -- Spacing scale -- */
+  /* -- Spacing scale — every step a multiple of --unit -- */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -128,9 +356,12 @@
   --space-10: 40px;
   --space-12: 48px;
 
-  /* -- Type -- */
-  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "JetBrains Mono", "Menlo", monospace;
+  /* -- Type — a display face for headings/nav/labels, a body face for
+     copy, a mono face for data/code/paths. Self-hosted variable fonts,
+     loaded in index.html. -- */
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Menlo", monospace;
 
   --text-xs:   11px;
   --text-sm:   12px;
@@ -145,91 +376,14 @@
   --leading-normal: 1.45;
   --leading-relaxed: 1.6;
 
-  /* -- Motion -- */
+  /* -- Motion — two durations, one curve; the "reduced motion" block
+     below collapses both to near-zero, same discipline app.css already
+     applied globally. -- */
   --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --dur-fast: 120ms;
   --dur-base: 180ms;
   --dur-slow: 280ms;
-}
-
-[data-theme="dark"] {
-  /* muted slate — softened "moonlight" feel, not neon */
-  --bg:            #0f131c;
-  --bg-soft:       #141923;
-  --surface:       #1a1f2b;
-  --surface-2:     #20262f;
-  --surface-3:     #262d38;
-  --overlay:       rgba(20, 25, 35, 0.85);
-
-  --border:        #252b36;
-  --border-strong: #34394a;
-  --border-soft:   #1d222c;
-
-  --text:          #d3d8e0;    /* slightly muted, easier on the eyes */
-  --text-2:        #9aa3b3;
-  --text-3:        #6b7385;
-  --text-4:        #464d5c;
-  --text-inverse:  #0f131c;
-
-  /* less saturated accent so it doesn't scream against deep bg */
-  --accent:        #6cb8d9;
-  --accent-soft:   #102531;
-  --accent-strong: #4ea3c8;
-  --accent-text:   #0a141d;
-  --accent-ring:   rgba(108, 184, 217, 0.26);
-
-  --success:       #5fb88a;
-  --success-soft:  #0d2419;
-  --warning:       #d5a866;
-  --warning-soft:  #251a07;
-  --danger:        #d97c7c;
-  --danger-soft:   #28100f;
-  --info:          #8189c4;
-  --info-soft:     #181a2f;
-
-  /* desaturated pastels for dark bg — softer, less candy-bright */
-  --pastel-1:  #6f9bb3;
-  --pastel-2:  #7da689;
-  --pastel-3:  #c4956d;
-  --pastel-4:  #b8838f;
-  --pastel-5:  #9686b3;
-  --pastel-6:  #b8a565;
-  --pastel-7:  #82a384;
-  --pastel-8:  #c08699;
-  --pastel-9:  #8a91b3;
-  --pastel-10: #c4986f;
-
-  --pastel-1-ink:  #95c1d9;
-  --pastel-2-ink:  #a4cfb0;
-  --pastel-3-ink:  #e8b893;
-  --pastel-4-ink:  #dcaab5;
-  --pastel-5-ink:  #bcabd9;
-  --pastel-6-ink:  #dcc88b;
-  --pastel-7-ink:  #a9caaa;
-  --pastel-8-ink:  #e1aabb;
-  --pastel-9-ink:  #b1b8d9;
-  --pastel-10-ink: #e8be93;
-
-  /* Exception/error node ink (#4556) — light red, legible on the dark
-     danger-tinted node body (--danger @22% over the dark surface). */
-  --exception-ink: #f0a8a8;
-
-  /* -- Skeleton / loading placeholders -- */
-  --skeleton-base:      #2a3140;   /* clearly lighter than surface (#1a1f2b) */
-  --skeleton-highlight: #333d4e;   /* shimmer highlight — lighter band */
-
-  --canvas-bg:        #0b0e15;
-  --canvas-grid:      rgba(211, 216, 224, 0.04);
-  --edge-color:       rgba(211, 216, 224, 0.10);
-  --edge-color-hi:    rgba(108, 184, 217, 0.55);
-  --node-stroke:      rgba(211, 216, 224, 0.16);
-  --node-stroke-hi:   rgba(108, 184, 217, 0.95);
-
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-3: 0 12px 32px -8px rgba(0, 0, 0, 0.6), 0 4px 12px rgba(0, 0, 0, 0.35);
-  --shadow-4: 0 24px 64px -16px rgba(0, 0, 0, 0.75), 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
 /* ============================================================
@@ -259,6 +413,12 @@
     text-rendering: optimizeLegibility;
   }
 
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
   button {
     font-family: inherit;
     font-size: inherit;
@@ -269,7 +429,7 @@
     cursor: pointer;
   }
 
-  input, textarea {
+  input, textarea, select {
     font-family: inherit;
   }
 }
@@ -314,7 +474,22 @@
 
 /* utility classes used across components */
 .mono { font-family: var(--font-mono); }
+.display { font-family: var(--font-display); }
 .muted { color: var(--text-3); }
+
+/* Small uppercase eyebrow/kicker label — section headers, table heads,
+   card tags. The single most repeated typographic move in this redesign:
+   a display-face, letter-spaced, uppercase caption sitting above/beside
+   a larger body-weight value. */
+.eyebrow {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
 .kbd {
   display: inline-flex;
   align-items: center;

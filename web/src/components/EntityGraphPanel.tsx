@@ -446,7 +446,7 @@ function TreeBranch({
 }) {
   return (
     <div className={className}>
-      <h3 className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-1.5">{title}</h3>
+      <h3 className="eyebrow mb-1.5">{title}</h3>
       {!edges || edges.length === 0 ? (
         <p className="text-text-4 text-sm pl-4">(none)</p>
       ) : (

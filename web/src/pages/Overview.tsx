@@ -49,7 +49,8 @@ export function Overview() {
   if (error) {
     return (
       <div className="p-8 max-w-lg">
-        <h1 className="text-xl font-semibold text-text mb-2">No index found</h1>
+        <p className="eyebrow mb-2">No index found</p>
+        <h1 className="text-xl font-semibold text-text mb-2">Nothing here yet</h1>
         <p className="text-text-3">{error}</p>
         <p className="text-text-4 text-sm mt-3">
           Run <code className="mono">ctx index &lt;path&gt;</code> or start <code className="mono">ctxd</code> against
@@ -71,14 +72,14 @@ export function Overview() {
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 border-b border-border-soft shrink-0">
-        <div className="flex gap-3 flex-wrap">
+        <div className="flex gap-2.5 flex-wrap">
           <Card className="px-4 py-2.5">
-            <div className="text-xl font-bold text-text leading-none">{stats.entities}</div>
-            <div className="text-text-3 text-xs mt-1">entities</div>
+            <div className="mono text-xl font-semibold text-text leading-none">{stats.entities}</div>
+            <div className="eyebrow mt-1.5">entities</div>
           </Card>
           <Card className="px-4 py-2.5">
-            <div className="text-xl font-bold text-text leading-none">{stats.edges}</div>
-            <div className="text-text-3 text-xs mt-1">resolved edges</div>
+            <div className="mono text-xl font-semibold text-text leading-none">{stats.edges}</div>
+            <div className="eyebrow mt-1.5">resolved edges</div>
           </Card>
           {kinds.map(([k, count]) => (
             <button key={k} onClick={() => setKind(k === kind ? 'All' : k)} className="text-left">
@@ -90,9 +91,9 @@ export function Overview() {
               >
                 <div className="flex items-center gap-1.5">
                   <span className="size-2 rounded-full shrink-0" style={{ background: `var(--pastel-${kindSlot(k)})` }} />
-                  <span className="text-xl font-bold text-text leading-none">{count}</span>
+                  <span className="mono text-xl font-semibold text-text leading-none">{count}</span>
                 </div>
-                <div className="text-text-3 text-xs mt-1">{k}</div>
+                <div className="eyebrow mt-1.5">{k}</div>
               </Card>
             </button>
           ))}
@@ -135,7 +136,10 @@ export function Overview() {
               </TabsContent>
             </Tabs>
           ) : (
-            <p className="p-4 text-text-3 text-sm">Select a row to inspect it.</p>
+            <div className="p-4">
+              <p className="eyebrow mb-1">Detail</p>
+              <p className="text-text-3 text-sm">Select a row to inspect it.</p>
+            </div>
           )}
         </div>
       </div>

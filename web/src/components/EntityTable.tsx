@@ -85,12 +85,17 @@ export function EntityTable({
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <table className="w-full text-sm border-collapse">
-          <thead className="sticky top-0 bg-bg-soft text-text-3 text-xs uppercase tracking-wide">
+        <table className="w-full text-sm border-collapse table-fixed">
+          <colgroup>
+            <col className="w-[110px]" />
+            <col className="w-[30%]" />
+            <col />
+          </colgroup>
+          <thead className="sticky top-0 bg-surface-2">
             <tr>
-              <th className="text-left font-medium px-3 py-2">Kind</th>
-              <th className="text-left font-medium px-3 py-2">Name</th>
-              <th className="text-left font-medium px-3 py-2">Location</th>
+              <th className="eyebrow text-left px-3 py-2.5">Kind</th>
+              <th className="eyebrow text-left px-3 py-2.5">Name</th>
+              <th className="eyebrow text-left px-3 py-2.5">Location</th>
             </tr>
           </thead>
           <tbody>
@@ -103,14 +108,19 @@ export function EntityTable({
                   selectedId === e.ID && 'bg-accent-soft',
                 )}
               >
-                <td className="px-3 py-2">
-                  <span className="inline-flex items-center gap-1.5">
+                <td className="px-3 py-2.5">
+                  <span className="inline-flex items-center gap-1.5 min-w-0">
                     <span className="size-2 rounded-full shrink-0" style={{ background: `var(--pastel-${kindSlot(e.Kind)})` }} />
-                    {e.Kind}
+                    <span className="truncate">{e.Kind}</span>
                   </span>
                 </td>
-                <td className="px-3 py-2 font-medium text-text">{e.Name}</td>
-                <td className="px-3 py-2 mono text-text-3 text-xs">
+                <td className="px-3 py-2.5 font-medium text-text truncate" title={e.Name}>
+                  {e.Name}
+                </td>
+                <td
+                  className="px-3 py-2.5 mono text-text-3 text-xs truncate"
+                  title={`${e.Anchor.File}:${e.Anchor.StartLine}`}
+                >
                   {e.Anchor.File}:{e.Anchor.StartLine}
                 </td>
               </tr>
