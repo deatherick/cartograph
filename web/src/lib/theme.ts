@@ -31,3 +31,30 @@ export function useTheme() {
 
   return { theme, toggle }
 }
+
+/** Read-only view of whatever `useTheme` above has actually applied to
+ * `<html data-theme>` — for consumers (like React Flow's `colorMode`
+ * below) that need to follow the app's own toggle, not the OS's
+ * `prefers-color-scheme`. Those two can disagree (OS set to dark, app
+ * manually toggled to light), and anything keyed off the OS query alone
+ * silently renders in the wrong mode. Uses a MutationObserver rather than
+ * its own state/effect pair so it never fights `useTheme`'s own
+ * read-write-localStorage cycle — just observes the one attribute both
+ * `useTheme` instances (NavRail's and this one) ultimately agree on. */
+export function useAppliedTheme(): Theme {
+  const [theme, setTheme] = useState<Theme>(
+    () => (document.documentElement.getAttribute('data-theme') as Theme | null) ?? systemTheme(),
+  )
+
+  useEffect(() => {
+    const el = document.documentElement
+    const observer = new MutationObserver(() => {
+      const next = (el.getAttribute('data-theme') as Theme | null) ?? systemTheme()
+      setTheme(next)
+    })
+    observer.observe(el, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => observer.disconnect()
+  }, [])
+
+  return theme
+}

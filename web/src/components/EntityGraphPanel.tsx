@@ -42,6 +42,7 @@ import dagre from 'dagre'
 import { ArrowLeft, Search as SearchIcon, Waypoints, ListTree, X, ChevronUp, ChevronDown } from 'lucide-react'
 import { api, type Entity, type Inspection } from '@/lib/api'
 import { useProject } from '@/lib/project-context'
+import { useAppliedTheme } from '@/lib/theme'
 import { kindSlot, KIND_LEGEND } from '@/lib/graph-colors'
 import { Button, Input } from '@/components/ui'
 import { cn } from '@/lib/utils'
@@ -424,6 +425,15 @@ function GraphCanvas({
   proOptions: { hideAttribution: boolean }
 }) {
   const { fitView } = useReactFlow()
+  // React Flow's own `colorMode` defaults to following the OS's
+  // `prefers-color-scheme`, entirely independent of the app's manual
+  // light/dark toggle (NavRail) — the two disagree whenever the OS is
+  // dark but the user has picked light in-app (or vice versa), and React
+  // Flow then paints its canvas/controls/minimap in the wrong mode (a
+  // black canvas while the rest of the UI is light). Pass the app's own
+  // applied theme explicitly instead of "system" so the graph always
+  // matches what's actually on screen.
+  const appliedTheme = useAppliedTheme()
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
 
@@ -491,7 +501,7 @@ function GraphCanvas({
         nodeTypes={nodeTypes}
         fitView
         proOptions={proOptions}
-        colorMode="system"
+        colorMode={appliedTheme}
       >
         <Background />
         <Controls showInteractive={false} />
