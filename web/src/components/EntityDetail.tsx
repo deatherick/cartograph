@@ -83,12 +83,12 @@ export function EntityDetail({
 
       {source && <pre className="bg-surface-2 border border-border rounded-lg p-3 text-xs overflow-x-auto mb-4">{source}</pre>}
 
-      <h3 className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-1.5">
+      <h3 className="eyebrow mb-1.5">
         Fan-in ({insp.FanIn?.length ?? 0})
       </h3>
       <EdgeList edges={insp.FanIn} endpoint="Src" byId={byId} onSelect={onSelect} />
 
-      <h3 className="text-xs font-semibold text-text-3 uppercase tracking-wide mt-4 mb-1.5">
+      <h3 className="eyebrow mt-4 mb-1.5">
         Fan-out ({insp.FanOut?.length ?? 0})
       </h3>
       <EdgeList edges={insp.FanOut} endpoint="Dst" byId={byId} onSelect={onSelect} />

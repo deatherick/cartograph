@@ -1,12 +1,11 @@
-// Per-project header — breadcrumb pattern adapted from Grafel's webui-v2
-// TopBar (MIT License, see NOTICE.md). The project switcher (a `<select>`
-// populated from /api/projects, ADR-0019) is the "scope selector" the
-// original file's own comment noted Cartograph didn't have yet — it now
-// does, once ctxd is given more than one <path> to watch. The operations
-// badge (bug_rate + time since last reindex, from /api/operations,
-// ADR-0018) is the other piece of daemon-lifecycle data now visible here
-// that wasn't before: no health dot on the reference this was adapted
-// from, since Grafel's own equivalent had nothing like opstatus to show.
+// Per-project header — breadcrumb pattern originally adapted from
+// Grafel's webui-v2 TopBar (MIT License, see NOTICE.md), restyled as
+// part of this project's Observatory-inspired redesign (docs/adr): the
+// current screen name now renders in the display face (matching every
+// page's own <h1>) and the stat/status pills read their values in mono
+// (Badge's own `mono` prop) so entity/edge counts read as DATA, not
+// prose — the same "data gets the mono face" discipline the reference
+// field guide's own type-pairing section describes.
 import { ChevronRight } from 'lucide-react'
 import { Badge } from '@/components/ui'
 import type { Stats, Operations, Project } from '@/lib/api'
@@ -42,9 +41,9 @@ export function TopBar({
   onProjectChange: (name: string) => void
 }) {
   return (
-    <header className="flex items-center justify-between h-14 shrink-0 px-4 border-b border-border bg-bg gap-3">
-      <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-md min-w-0">
-        <span className="text-text-3 shrink-0">Cartograph</span>
+    <header className="flex items-center justify-between h-14 shrink-0 px-5 border-b border-border bg-bg gap-3">
+      <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-md min-w-0">
+        <span className="text-text-4 shrink-0">Cartograph</span>
         <ChevronRight size={12} className="text-text-4 shrink-0" />
         {projects.length > 1 ? (
           <select
@@ -65,14 +64,18 @@ export function TopBar({
           </span>
         )}
         <ChevronRight size={12} className="text-text-4 shrink-0" />
-        <span className="font-medium text-text truncate">{surfaceLabel}</span>
+        <span className="font-display font-semibold text-text truncate">{surfaceLabel}</span>
       </nav>
 
       <div className="flex items-center gap-2 shrink-0">
         {stats && (
           <>
-            <Badge tone="neutral">{stats.entities} entities</Badge>
-            <Badge tone="neutral">{stats.edges} edges</Badge>
+            <Badge tone="neutral" mono>
+              {stats.entities} entities
+            </Badge>
+            <Badge tone="neutral" mono>
+              {stats.edges} edges
+            </Badge>
           </>
         )}
         {operations && (
@@ -80,7 +83,7 @@ export function TopBar({
             <Badge tone={operations.Watching ? 'success' : 'neutral'}>
               {operations.Watching ? 'watching' : 'not watching'}
             </Badge>
-            <Badge tone={operations.LastError ? 'danger' : 'neutral'} title={operations.LastError || undefined}>
+            <Badge tone={operations.LastError ? 'danger' : 'neutral'} title={operations.LastError || undefined} mono>
               reindexed {timeAgo(operations.LastReindexAt)}
             </Badge>
           </>

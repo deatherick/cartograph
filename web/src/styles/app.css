@@ -1,13 +1,15 @@
 /* ============================================================
    app.css — the token bridge.
 
-   Adapted from Grafel's webui-v2 (MIT License, Copyright (c) 2026 Jorge
-   Cajas — see tokens.css's header and NOTICE.md for the full attribution
-   record). Trimmed of animation keyframes tied to Grafel-only features
-   (index wizard progress bar, insight-glow, flow-replay bounce,
-   background-enrichment bar) this project has no equivalent of; the
-   token bridge itself, base reset, scrollbar, and skeleton-shimmer
-   primitives are unchanged.
+   Base structure adapted from Grafel's webui-v2 (MIT License, Copyright
+   (c) 2026 Jorge Cajas — see tokens.css's header and NOTICE.md for the
+   full attribution record); trimmed of animation keyframes tied to
+   Grafel-only features this project has no equivalent of. tokens.css
+   itself was rewritten for this project's own Observatory-inspired
+   redesign (three-layer primitive/semantic/theme contract, a second
+   accent hue, a display/body/mono type trio) — see that file's header.
+   The token bridge shape, base reset, scrollbar, and skeleton-shimmer
+   primitives here are otherwise unchanged.
 
    Layer order matters:
    1. tokens.css     → the SOURCE OF TRUTH (CSS custom properties + reset).
@@ -53,6 +55,11 @@
   --color-accent-strong: var(--accent-strong);
   --color-accent-text: var(--accent-text);
 
+  /* -- Accent2 (pattern/similarity signal) -- */
+  --color-accent2: var(--accent2);
+  --color-accent2-soft: var(--accent2-soft);
+  --color-accent2-strong: var(--accent2-strong);
+
   /* -- Status -- */
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
@@ -85,6 +92,7 @@
 
   /* -- Type -- */
   --font-sans: var(--font-sans);
+  --font-display: var(--font-display);
   --font-mono: var(--font-mono);
 
   --text-xs: var(--text-xs);

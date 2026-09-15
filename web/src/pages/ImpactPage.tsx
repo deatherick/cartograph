@@ -35,6 +35,7 @@ export function ImpactPage() {
 
   return (
     <div className="p-6 max-w-3xl">
+      <p className="eyebrow mb-2">Blast radius</p>
       <h1 className="text-xl font-semibold text-text mb-1">Impact of a git diff</h1>
       <p className="text-text-3 mb-1">
         Blast radius of every entity a <code className="mono">git diff</code> touched — what changed, what

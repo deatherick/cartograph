@@ -40,7 +40,7 @@ export function EntityImpactPanel({ name, file }: { name: string; file: string }
       <EntitySection title={`Direct callers (${result.DirectCallers?.length ?? 0})`} entities={result.DirectCallers} />
 
       <div className="mt-4">
-        <h3 className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-1.5">
+        <h3 className="eyebrow mb-1.5">
           Full transitive impact ({result.Transitive?.length ?? 0})
         </h3>
         {!result.Transitive || result.Transitive.length === 0 ? (
@@ -65,7 +65,7 @@ export function EntityImpactPanel({ name, file }: { name: string; file: string }
 export function EntitySection({ title, entities, className }: { title: string; entities: Entity[] | null; className?: string }) {
   return (
     <div className={className}>
-      <h3 className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-1.5">{title}</h3>
+      <h3 className="eyebrow mb-1.5">{title}</h3>
       {!entities || entities.length === 0 ? (
         <p className="text-text-4 text-sm">(none)</p>
       ) : (

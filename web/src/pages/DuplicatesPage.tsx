@@ -7,6 +7,13 @@
 // here is the exact same internal/service.Decide the CLI calls, so a
 // pair decided from the browser never resurfaces on the CLI either, and
 // vice versa.
+//
+// Card layout restyled as part of this project's Observatory-inspired
+// redesign (docs/adr): scores now use accent2 (this page's own reserved
+// "pattern match" identity color, tokens.css) instead of the generic
+// success/warning ramp — a duplicate candidate is a SIMILARITY signal,
+// not a health status, and deserves its own visual language rather than
+// borrowing the "is this okay or not" one every other status pill uses.
 import { useState } from 'react'
 import { api, DECISIONS, type Decision, type PairWithEntities } from '@/lib/api'
 import { Badge, Button, Card, CardBody, CardHeader } from '@/components/ui'
@@ -50,8 +57,9 @@ export function DuplicatesPage() {
 
   return (
     <div className="p-6 max-w-4xl">
+      <p className="eyebrow mb-2">Similarity engine</p>
       <h1 className="text-xl font-semibold text-text mb-1">Duplicates &amp; similarity</h1>
-      <p className="text-text-3 mb-5">
+      <p className="text-text-3 mb-5 max-w-2xl">
         Every undecided candidate the similarity engine found — evidence, never a verdict. Record what you actually
         think of each pair; a decided pair stops resurfacing here (and in <code className="mono">ctx duplicates</code>
         ) once you do.
@@ -72,29 +80,29 @@ export function DuplicatesPage() {
   )
 }
 
-function scoreTone(score: number): 'success' | 'warning' | 'neutral' {
-  if (score >= 0.8) return 'success'
-  if (score >= 0.5) return 'warning'
-  return 'neutral'
-}
-
 function PairCard({ pair, onDecide }: { pair: PairWithEntities; onDecide: (d: Decision) => void }) {
   const [decision, setDecision] = useState<Decision>(DECISIONS[0].value)
 
   return (
-    <Card>
+    <Card className="transition-shadow hover:shadow-[var(--shadow-2)]">
       <CardHeader className="flex items-center justify-between gap-4">
         <div className="flex flex-col gap-1.5 min-w-0">
           <EntityLine entity={pair.A} />
           <EntityLine entity={pair.B} />
         </div>
-        {pair.Pair.Exact && <Badge tone="danger">EXACT</Badge>}
+        {pair.Pair.Exact && <Badge tone="accent2">Exact match</Badge>}
       </CardHeader>
       <CardBody className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-2">
-          <Badge tone={scoreTone(pair.Pair.Overall)}>overall {pair.Pair.Overall.toFixed(2)}</Badge>
-          <Badge tone="neutral">structural {pair.Pair.Structural.toFixed(2)}</Badge>
-          <Badge tone="neutral">behavioral {pair.Pair.Behavioral.toFixed(2)}</Badge>
+          <Badge tone="accent2" mono>
+            overall {pair.Pair.Overall.toFixed(2)}
+          </Badge>
+          <Badge tone="neutral" mono>
+            structural {pair.Pair.Structural.toFixed(2)}
+          </Badge>
+          <Badge tone="neutral" mono>
+            behavioral {pair.Pair.Behavioral.toFixed(2)}
+          </Badge>
         </div>
         <div className="flex items-center gap-2">
           <select

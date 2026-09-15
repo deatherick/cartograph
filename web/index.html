@@ -5,6 +5,31 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cartograph</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
+    <script>
+      // Runs before first paint, before any stylesheet needs it settled —
+      // without this, a light-theme user's browser flashes dark (or vice
+      // versa) for one frame while React's own useTheme effect (which
+      // only runs AFTER first paint) catches up. Same fix Observatory's
+      // own field guide documents for the identical problem.
+      try {
+        var stored = localStorage.getItem('cartograph-theme')
+        var theme = stored === 'light' || stored === 'dark' ? stored : null
+        if (!theme) {
+          theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        }
+        document.documentElement.setAttribute('data-theme', theme)
+      } catch (e) {
+        // Storage blocked (private mode) — fall through unstamped; the
+        // [data-theme="dark"]/prefers-color-scheme CSS fallback still
+        // renders correctly, just without the persisted preference.
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
