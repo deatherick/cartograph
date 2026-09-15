@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -212,5 +213,135 @@ func TestService_ImpactFromGitDiff_NoChanges_IsEmptyNotError(t *testing.T) {
 	}
 	if len(got.ChangedEntities) != 0 {
 		t.Fatalf("expected no changed entities with a clean working tree, got %+v", got.ChangedEntities)
+	}
+}
+
+// suggestFixtureSrc gives Suggest something to rank: "greet" is an exact
+// match for the query "greet", "greetAdmin" is a prefix match, and
+// "farewellGreeting" only contains "greet" mid-name — three different
+// tiers from one query, plus a same-named class to exercise the kind
+// filter.
+const suggestFixtureSrc = `export function greet(): void {}
+export function greetAdmin(): void {}
+export function farewellGreeting(): void {}
+export class greet {}
+`
+
+func TestService_Suggest_RanksExactThenPrefixThenContains(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "greet.ts"), []byte(suggestFixtureSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := New()
+	repo := RepoName(root)
+	if _, err := svc.Index(t.Context(), root, repo); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	got, err := svc.Suggest(root, repo, "greet", "", 0)
+	if err != nil {
+		t.Fatalf("Suggest: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("expected 4 matches across kinds, got %d: %+v", len(got), got)
+	}
+	// Tier 0 (exact, case-insensitive on bare name) sorts first: both the
+	// function and the class named exactly "greet", ordered next by Kind
+	// staying stable to file/name tiebreak (Class < Function alphabetically
+	// by name is not guaranteed — assert the SET of the first two, not a
+	// strict order between same-tier entries).
+	firstTwo := map[string]bool{got[0].Name: true, got[1].Name: true}
+	if !firstTwo["greet"] || got[0].Name != "greet" || got[1].Name != "greet" {
+		t.Errorf("expected the two exact 'greet' matches first, got %+v", got[:2])
+	}
+	if got[2].Name != "greetAdmin" {
+		t.Errorf("expected the prefix match 'greetAdmin' third, got %+v", got[2])
+	}
+	if got[3].Name != "farewellGreeting" {
+		t.Errorf("expected the contains-only match 'farewellGreeting' last, got %+v", got[3])
+	}
+}
+
+func TestService_Suggest_KindFilterAndLimit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "greet.ts"), []byte(suggestFixtureSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := New()
+	repo := RepoName(root)
+	if _, err := svc.Index(t.Context(), root, repo); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	got, err := svc.Suggest(root, repo, "greet", "Class", 0)
+	if err != nil {
+		t.Fatalf("Suggest: %v", err)
+	}
+	if len(got) != 1 || string(got[0].Kind) != "Class" {
+		t.Fatalf("expected exactly the one Class match, got %+v", got)
+	}
+
+	limited, err := svc.Suggest(root, repo, "greet", "", 2)
+	if err != nil {
+		t.Fatalf("Suggest: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Fatalf("expected limit=2 to cap results at 2, got %d", len(limited))
+	}
+}
+
+func TestService_Suggest_EmptyQuery_ReturnsNothing(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "greet.ts"), []byte(suggestFixtureSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := New()
+	repo := RepoName(root)
+	if _, err := svc.Index(t.Context(), root, repo); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	got, err := svc.Suggest(root, repo, "   ", "", 0)
+	if err != nil {
+		t.Fatalf("Suggest: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no matches for a blank query, got %+v", got)
+	}
+}
+
+// TestService_Find_NoMatches_ReturnsEmptySliceNotNil guards a real crash
+// found live: Find used to return a nil slice on zero matches, which
+// encodes to JSON `null` — the Web UI's api.find is typed Entity[] (never
+// nullable) and calls matches.length straight on the response, so a
+// search with zero exact matches crashed with "Cannot read properties of
+// null (reading 'length')" before the existing "No entity found" handling
+// ever ran. json.Marshal is the one place this distinction actually
+// matters (Go itself treats nil and empty slices interchangeably for
+// len()/range), so assert on the marshaled bytes, not just len(got).
+func TestService_Find_NoMatches_ReturnsEmptySliceNotNil(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.ts"), []byte("export function a(): void {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := New()
+	repo := RepoName(root)
+	if _, err := svc.Index(t.Context(), root, repo); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	got, err := svc.Find(root, repo, "doesNotExist")
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected a non-nil empty slice, got nil (would encode to JSON null)")
+	}
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "[]" {
+		t.Fatalf("expected Find's zero-match result to marshal to \"[]\", got %q", b)
 	}
 }

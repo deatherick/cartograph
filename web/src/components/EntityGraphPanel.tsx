@@ -44,7 +44,7 @@ import { api, type Entity, type Inspection } from '@/lib/api'
 import { useProject } from '@/lib/project-context'
 import { useAppliedTheme } from '@/lib/theme'
 import { kindSlot, KIND_LEGEND } from '@/lib/graph-colors'
-import { Button, Input } from '@/components/ui'
+import { Button, Input, Pill } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
 interface HistoryEntry {
@@ -251,6 +251,96 @@ export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initi
     }
   }, [center, project, setNodes, setEdges])
 
+  // Live autocomplete for the toolbar search (ADR-0031): typing a partial,
+  // approximate name — not knowing it exactly, the real complaint this
+  // answers ("asume que uno se sabe los nombres exactos de las
+  // funciones") — surfaces real matching entities as you type, via
+  // api.suggest's substring search, instead of requiring Enter + an exact
+  // or fully-disambiguated name before anything happens.
+  const [suggestions, setSuggestions] = useState<Entity[]>([])
+  const [suggestOpen, setSuggestOpen] = useState(false)
+  const [suggestIndex, setSuggestIndex] = useState(-1)
+  const [kindFilter, setKindFilter] = useState('')
+  // Set right before a programmatic setSearchInput (picking a suggestion,
+  // or submitting the plain exact-match form) so the effect below doesn't
+  // treat that as a fresh keystroke and immediately reopen the dropdown
+  // over the graph it just navigated to — a real bug found live: picking
+  // "grepFixture" via Enter re-triggered this effect on the resulting
+  // searchInput change, and the single now-exact match reopened the
+  // dropdown right on top of the freshly-loaded canvas.
+  const skipNextSuggestRef = useRef(false)
+
+  useEffect(() => {
+    if (skipNextSuggestRef.current) {
+      skipNextSuggestRef.current = false
+      return
+    }
+    const q = searchInput.trim()
+    if (!q) {
+      setSuggestions([])
+      setSuggestOpen(false)
+      return
+    }
+    let cancelled = false
+    // Debounced, not fired on every keystroke — a real neighborhood of
+    // thousands of entities makes an unthrottled call-per-keystroke
+    // wasteful and prone to out-of-order responses; 150ms is short enough
+    // to still feel live.
+    const timer = setTimeout(() => {
+      api
+        .suggest(project, q, kindFilter)
+        .then((matches) => {
+          if (cancelled) return
+          setSuggestions(matches)
+          setSuggestOpen(true)
+          setSuggestIndex(-1)
+        })
+        .catch(() => {
+          // A failed suggest call shouldn't block the older exact-match
+          // submit path below — just show no suggestions.
+          if (cancelled) return
+          setSuggestions([])
+        })
+    }, 150)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [searchInput, kindFilter, project])
+
+  const pickSuggestion = useCallback(
+    (e: Entity) => {
+      setSuggestOpen(false)
+      setSuggestions([])
+      skipNextSuggestRef.current = true
+      setSearchInput(e.Name)
+      navigateTo(e.Name, e.Anchor.File)
+    },
+    [navigateTo],
+  )
+
+  const onSearchKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (!suggestOpen || suggestions.length === 0) return
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSuggestIndex((i) => Math.min(i + 1, suggestions.length - 1))
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSuggestIndex((i) => Math.max(i - 1, 0))
+      } else if (e.key === 'Enter' && suggestIndex >= 0) {
+        // A specific suggestion is highlighted — pick it directly and
+        // skip the older submit handler's own exact/ambiguous-name path
+        // below entirely (this is already a specific, resolved entity).
+        e.preventDefault()
+        pickSuggestion(suggestions[suggestIndex])
+      } else if (e.key === 'Escape') {
+        setSuggestOpen(false)
+      }
+    },
+    [suggestOpen, suggestions, suggestIndex, pickSuggestion],
+  )
+
   const onSearchSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault()
@@ -258,6 +348,7 @@ export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initi
       if (!name) return
       setError(null)
       setCandidates(null)
+      setSuggestOpen(false)
       try {
         const matches = await api.find(project, name)
         if (matches.length === 0) {
@@ -303,15 +394,74 @@ export function EntityGraphPanel({ initialName = '', initialFile = '' }: { initi
             <ArrowLeft size={14} />
           </Button>
         )}
-        <form onSubmit={onSearchSubmit} className="flex items-center gap-2 flex-1 max-w-md">
-          <SearchIcon size={14} className="text-text-4 shrink-0" />
-          <Input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Entity name to center the graph on…"
-            className="h-8"
-          />
-        </form>
+        <div className="relative flex-1 max-w-md">
+          <form onSubmit={onSearchSubmit} className="flex items-center gap-2">
+            <SearchIcon size={14} className="text-text-4 shrink-0" />
+            <Input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={onSearchKeyDown}
+              onFocus={() => suggestions.length > 0 && setSuggestOpen(true)}
+              // A short delay, not an immediate close: a plain onBlur
+              // would fire before a click on a dropdown item registers,
+              // making suggestions unclickable by mouse (only usable via
+              // ArrowDown/Enter). onMouseDown on each item below also
+              // guards this, but the delay covers Tab-away too.
+              onBlur={() => setTimeout(() => setSuggestOpen(false), 120)}
+              placeholder="Entity name to center the graph on… (partial names OK)"
+              className="h-8"
+            />
+          </form>
+
+          {suggestOpen && (
+            <div className="absolute top-full left-0 right-0 mt-1 z-20 rounded-md border border-border bg-surface shadow-[var(--shadow-2)] overflow-hidden">
+              <div className="flex flex-wrap gap-1 px-2 py-1.5 border-b border-border-soft">
+                <Pill active={kindFilter === ''} onMouseDown={(e) => e.preventDefault()} onClick={() => setKindFilter('')} className="h-6 px-2 text-xs">
+                  All kinds
+                </Pill>
+                {KIND_LEGEND.map((kind) => (
+                  <Pill
+                    key={kind}
+                    active={kindFilter === kind}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setKindFilter((k) => (k === kind ? '' : kind))}
+                    className="h-6 px-2 text-xs"
+                  >
+                    <span className="size-1.5 rounded-full shrink-0" style={{ background: `var(--pastel-${kindSlot(kind)})` }} />
+                    {kind}
+                  </Pill>
+                ))}
+              </div>
+
+              {suggestions.length === 0 ? (
+                <p className="px-3 py-2.5 text-sm text-text-3">
+                  No entity matches "{searchInput.trim()}"{kindFilter ? ` among ${kindFilter}s` : ''}.
+                </p>
+              ) : (
+                <ul>
+                  {suggestions.map((s, i) => (
+                    <li key={s.ID}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => pickSuggestion(s)}
+                        className={cn(
+                          'flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm',
+                          i === suggestIndex ? 'bg-accent-soft' : 'hover:bg-surface-2',
+                        )}
+                      >
+                        <span className="size-2 rounded-full shrink-0" style={{ background: `var(--pastel-${kindSlot(s.Kind)})` }} />
+                        <span className="text-text-4 text-[10px] uppercase tracking-wide shrink-0">{s.Kind}</span>
+                        <span className="text-text font-medium truncate">{s.Name}</span>
+                        <span className="text-text-4 mono text-xs truncate ml-auto">{s.Anchor.File}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
         <div className="flex items-center border border-border rounded-md overflow-hidden shrink-0">
           <button
             onClick={() => setView('graph')}

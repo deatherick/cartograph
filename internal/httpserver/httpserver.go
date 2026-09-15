@@ -261,6 +261,30 @@ func New(svc *service.Service, registry *ProjectRegistry) http.Handler {
 		writeJSON(w, entities)
 	})
 
+	mux.HandleFunc("/api/suggest", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := resolveProject(w, r)
+		if !ok {
+			return
+		}
+		q := r.URL.Query().Get("q")
+		if q == "" {
+			http.Error(w, "missing ?q=", http.StatusBadRequest)
+			return
+		}
+		limit := 8
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				limit = n
+			}
+		}
+		entities, err := svc.Suggest(p.Root, p.Repo, q, r.URL.Query().Get("kind"), limit)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, entities)
+	})
+
 	mux.HandleFunc("/api/inspect", func(w http.ResponseWriter, r *http.Request) {
 		p, ok := resolveProject(w, r)
 		if !ok {

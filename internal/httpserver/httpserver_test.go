@@ -127,6 +127,75 @@ func TestHTTPServer_Inspect_UnknownName_Is400(t *testing.T) {
 	}
 }
 
+func TestHTTPServer_Suggest_SubstringMatchAcrossEntities(t *testing.T) {
+	srv := setup(t)
+	defer srv.Close()
+
+	// setup's fixture is "helper" calling "greet" — "e" is a substring of
+	// both, unlike /api/find's exact match, which would need the caller
+	// to already know one or the other by name.
+	res, err := http.Get(srv.URL + "/api/suggest?q=e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d", res.StatusCode)
+	}
+	var got []model.Entity
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected both 'helper' and 'greet' to match substring \"e\", got %+v", got)
+	}
+}
+
+func TestHTTPServer_Suggest_KindFilter(t *testing.T) {
+	srv := setup(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/suggest?q=e&kind=Function")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var got []model.Entity
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected both entities (both are Functions), got %+v", got)
+	}
+
+	res2, err := http.Get(srv.URL + "/api/suggest?q=e&kind=Class")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res2.Body.Close() }()
+	var got2 []model.Entity
+	if err := json.NewDecoder(res2.Body).Decode(&got2); err != nil {
+		t.Fatal(err)
+	}
+	if len(got2) != 0 {
+		t.Fatalf("expected no Class matches in a fixture with none, got %+v", got2)
+	}
+}
+
+func TestHTTPServer_Suggest_MissingQuery_Is400(t *testing.T) {
+	srv := setup(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/suggest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400", res.StatusCode)
+	}
+}
+
 func TestHTTPServer_Related(t *testing.T) {
 	srv := setup(t)
 	defer srv.Close()
