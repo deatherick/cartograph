@@ -175,6 +175,17 @@ export const api = {
   graph: (project: string) => getJSON<GraphData>(withProject('/api/graph', project)),
   find: (project: string, name: string) =>
     getJSON<Entity[]>(withProject(`/api/find?name=${encodeURIComponent(name)}`, project)),
+  // suggest is Find's predictive counterpart (ADR-0031): a case-insensitive
+  // substring match instead of an exact one, meant for a live-typing
+  // autocomplete rather than a submit-and-see search. kind narrows to one
+  // model.Kind (e.g. "Function"); omit/empty for all kinds.
+  suggest: (project: string, query: string, kind = '', limit = 8) =>
+    getJSON<Entity[]>(
+      withProject(
+        `/api/suggest?q=${encodeURIComponent(query)}&kind=${encodeURIComponent(kind)}&limit=${limit}`,
+        project,
+      ),
+    ),
   inspect: (project: string, name: string, file = '') =>
     getJSON<Inspection>(
       withProject(`/api/inspect?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`, project),

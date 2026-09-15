@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/deatherick/cartograph/internal/compile"
@@ -101,6 +102,79 @@ func (s *Service) Find(root, repo, name string) ([]model.Entity, error) {
 		}
 	}
 	return out, nil
+}
+
+// Suggest answers the Web UI's Graph search box (ADR-0031): unlike Find's
+// exact match — reasonable once you already know the name, useless while
+// you're still guessing it — this is a case-insensitive substring match
+// on the bare name, the same rule EntityTable's and the in-canvas node
+// finder's own search boxes already use (ADR-0030), extended here to
+// query the whole indexed snapshot instead of only whatever's already on
+// screen. kind, if non-empty, narrows to entities of exactly that
+// model.Kind first (an exact filter, not itself fuzzy) so "Function" vs
+// "Method" vs "Class" name collisions are easy to break by eye instead of
+// by typing more of the name. Deliberately NOT fuzzy/typo-tolerant
+// ranking or an embeddings-based search — see ADR-0006 for why that's
+// still out of scope; a plain substring match is a small, honest step
+// beyond Find's exact match, not a reopening of that decision.
+//
+// Ordering is deterministic and meaning-bearing, not alphabetical: an
+// exact case-insensitive match on the bare name ranks first, then a
+// prefix match, then any other substring match — each tier then broken
+// by bare name, then file, so the same query always returns the same
+// order. limit caps the result (the UI shows a short dropdown, not a
+// full table); limit <= 0 means "no cap".
+func (s *Service) Suggest(root, repo, query, kind string, limit int) ([]model.Entity, error) {
+	snap, err := s.open(root, repo)
+	if err != nil {
+		return nil, err
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil, nil
+	}
+
+	type ranked struct {
+		entity model.Entity
+		tier   int // 0 = exact, 1 = prefix, 2 = contains
+	}
+	var out []ranked
+	for _, e := range snap.All() {
+		if kind != "" && string(e.Kind) != kind {
+			continue
+		}
+		name := strings.ToLower(e.Name)
+		idx := strings.Index(name, q)
+		if idx < 0 {
+			continue
+		}
+		tier := 2
+		if name == q {
+			tier = 0
+		} else if idx == 0 {
+			tier = 1
+		}
+		out = append(out, ranked{entity: e, tier: tier})
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].tier != out[j].tier {
+			return out[i].tier < out[j].tier
+		}
+		if out[i].entity.Name != out[j].entity.Name {
+			return out[i].entity.Name < out[j].entity.Name
+		}
+		return out[i].entity.Anchor.File < out[j].entity.Anchor.File
+	})
+
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	entities := make([]model.Entity, len(out))
+	for i, r := range out {
+		entities[i] = r.entity
+	}
+	return entities, nil
 }
 
 // findUnique locates the single entity in snap named name, erroring if
