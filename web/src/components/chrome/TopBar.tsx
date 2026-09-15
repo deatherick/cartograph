@@ -8,6 +8,7 @@
 // field guide's own type-pairing section describes.
 import { ChevronRight } from 'lucide-react'
 import { Badge } from '@/components/ui'
+import { ProjectSwitcher } from './ProjectSwitcher'
 import type { Stats, Operations, Project } from '@/lib/api'
 
 function timeAgo(iso: string): string {
@@ -46,18 +47,7 @@ export function TopBar({
         <span className="text-text-4 shrink-0">Cartograph</span>
         <ChevronRight size={12} className="text-text-4 shrink-0" />
         {projects.length > 1 ? (
-          <select
-            aria-label="Project"
-            value={project}
-            onChange={(e) => onProjectChange(e.target.value)}
-            className="font-mono text-text-2 bg-transparent border border-border rounded-md px-1.5 py-0.5 text-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
-          >
-            {projects.map((p) => (
-              <option key={p.name} value={p.name}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          <ProjectSwitcher projects={projects} project={project} onChange={onProjectChange} />
         ) : (
           <span className="font-mono text-text-2">
             {projectsLoading ? '…' : (stats?.repo ?? project ?? '…')}

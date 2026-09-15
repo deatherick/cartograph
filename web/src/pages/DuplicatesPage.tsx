@@ -14,9 +14,10 @@
 // success/warning ramp — a duplicate candidate is a SIMILARITY signal,
 // not a health status, and deserves its own visual language rather than
 // borrowing the "is this okay or not" one every other status pill uses.
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { Search as SearchIcon } from 'lucide-react'
 import { api, DECISIONS, type Decision, type PairWithEntities } from '@/lib/api'
-import { Badge, Button, Card, CardBody, CardHeader } from '@/components/ui'
+import { Badge, Button, Card, CardBody, CardHeader, Input } from '@/components/ui'
 import { useProject } from '@/lib/project-context'
 import { usePoll } from '@/hooks/usePoll'
 
@@ -24,6 +25,15 @@ export function DuplicatesPage() {
   const { project } = useProject()
   const [pairs, setPairs] = useState<PairWithEntities[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Every undecided pair loads up front (usePoll above) — this page's own
+  // context for the same predictive-search pattern ADR-0031 introduced:
+  // client-side, not api.suggest, since the whole list is already in
+  // memory and a duplicate pair is only ever "similar to a name I'm
+  // typing" against entities already resolved server-side, not a fuzzy
+  // lookup of its own. A real gap before this: with more than a handful
+  // of undecided pairs, there was no way to jump to one specific entity's
+  // duplicates short of scanning the whole list by eye.
+  const [query, setQuery] = useState('')
 
   usePoll(
     () => {
@@ -42,6 +52,15 @@ export function DuplicatesPage() {
     // reindexed, neither of which happens as often as a live stats
     // counter ticking).
   )
+
+  const filteredPairs = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return pairs
+    return (pairs ?? []).filter(
+      (p) => p.A.Name.toLowerCase().includes(q) || p.B.Name.toLowerCase().includes(q) ||
+        p.A.Qualified.toLowerCase().includes(q) || p.B.Qualified.toLowerCase().includes(q),
+    )
+  }, [pairs, query])
 
   async function decide(pair: PairWithEntities, decision: Decision) {
     try {
@@ -71,10 +90,28 @@ export function DuplicatesPage() {
         <p className="text-text-4">No undecided duplicate/similarity pairs above the default threshold.</p>
       )}
 
+      {pairs !== null && pairs.length > 0 && (
+        <div className="flex items-center gap-2 mb-4">
+          <SearchIcon size={14} className="text-text-4 shrink-0" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter by entity name or qualified name…"
+            className="max-w-sm"
+          />
+          <span className="text-text-3 text-sm">
+            {filteredPairs?.length ?? 0} of {pairs.length} pairs
+          </span>
+        </div>
+      )}
+
       <div className="flex flex-col gap-3">
-        {pairs?.map((pair) => (
+        {filteredPairs?.map((pair) => (
           <PairCard key={`${pair.Pair.A}_${pair.Pair.B}`} pair={pair} onDecide={(d) => decide(pair, d)} />
         ))}
+        {pairs !== null && pairs.length > 0 && filteredPairs?.length === 0 && (
+          <p className="text-text-4">No undecided pair matches "{query}".</p>
+        )}
       </div>
     </div>
   )
